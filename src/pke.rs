@@ -18,18 +18,20 @@
 //! ```
 
 use crate::{
+    crypto,
     error::Result,
     math::{
         ntt::{basemul, from_ntt, to_mont, to_ntt},
         ring::{Poly, PolyVector, add, add_vector, sub},
     },
     params::{
-        CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, ETA1, ETA2, K, Q,
-        SHARED_SECRET_BYTES,
+        CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, ETA1, ETA2, K,
+        POLY_VECTOR_BYTES, Q, SHARED_SECRET_BYTES,
     },
-    sample::{crypto, sample_matrix, sample_noise},
+    sample::{sample_matrix, sample_noise},
     serialize::{decode_ciphertext, decode_public_key, encode_ciphertext, encode_public_key},
 };
+use subtle::{ConditionallySelectable, ConstantTimeEq};
 
 pub trait Pke {
     type PublicKey;
@@ -79,7 +81,7 @@ pub struct MlKem512Pke;
 
 pub struct MlKem512PublicKey(pub [u8; ENCAPSULATION_KEY_BYTES]);
 
-pub struct MlKem512SecretKey(pub Vec<u8>);
+pub struct MlKem512SecretKey(pub [u8; POLY_VECTOR_BYTES]);
 
 pub struct MlKem512Ciphertext(pub [u8; CIPHERTEXT_BYTES]);
 
@@ -123,7 +125,7 @@ impl Pke for MlKem512Pke {
 
         Ok((
             MlKem512PublicKey(encode_public_key(&t_hat, &rho)),
-            MlKem512SecretKey(crate::serialize::encode_poly_vector(&s_hat, 12)),
+            MlKem512SecretKey(crate::serialize::encode_secret_key(&s_hat)),
         ))
     }
 
@@ -139,8 +141,9 @@ impl Pke for MlKem512Pke {
         fn message_to_poly(message: &[u8; 32]) -> Poly {
             let mut coeffs = [0i16; crate::params::N];
             for (i, coeff) in coeffs.iter_mut().enumerate() {
+                // Secret bit: arithmetic select.
                 let bit = (message[i / 8] >> (i % 8)) & 1;
-                *coeff = if bit == 1 { (Q + 1) / 2 } else { 0 };
+                *coeff = i16::from(bit) * ((Q + 1) / 2);
             }
             Poly::new(coeffs)
         }
@@ -165,10 +168,19 @@ impl Pke for MlKem512Pke {
 
     fn decrypt(sk: &Self::SecretKey, ct: &Self::Ciphertext) -> Result<[u8; 32]> {
         fn poly_to_message(poly: &Poly) -> [u8; 32] {
+            fn ge_mask_u16(lhs: u16, rhs: u16) -> u16 {
+                // Branchless lhs >= rhs mask.
+                let diff = i32::from(lhs) - i32::from(rhs);
+                (!(diff >> 31) as u16).wrapping_neg()
+            }
+
             let mut message = [0u8; 32];
             for (i, &coeff) in poly.coeffs().iter().enumerate() {
-                let normalized = if coeff < 0 { coeff + Q } else { coeff };
-                let bit = (((i32::from(normalized) << 1) + i32::from(Q) / 2) / i32::from(Q)) & 1;
+                // Equivalent to round(2*coeff/q) & 1, without division.
+                let coeff = coeff as u16;
+                let in_lower_bound = ge_mask_u16(coeff, 833);
+                let in_upper_bound = ge_mask_u16(2496, coeff);
+                let bit = (in_lower_bound & in_upper_bound) & 1;
                 message[i / 8] |= (bit as u8) << (i % 8);
             }
             message
@@ -194,7 +206,7 @@ impl FoPke for MlKem512Pke {
         let (pk, sk) = Self::keygen(d)?;
         let h_pk = crypto::sha3_256(&pk.0);
         let mut dk = [0u8; DECAPSULATION_KEY_BYTES];
-        dk[..768].copy_from_slice(&sk.0);
+        dk[..POLY_VECTOR_BYTES].copy_from_slice(&sk.0);
         dk[768..1568].copy_from_slice(&pk.0);
         dk[1568..1600].copy_from_slice(&h_pk);
         dk[1600..].copy_from_slice(z);
@@ -210,8 +222,9 @@ impl FoPke for MlKem512Pke {
     }
 
     fn pke_decrypt_for_fo(dk: &Self::DecapsulationKey, ct: &Self::Ciphertext) -> Result<[u8; 32]> {
-        let mut sk = Vec::with_capacity(768);
-        sk.extend_from_slice(&dk[..768]);
+        let mut sk = [0u8; POLY_VECTOR_BYTES];
+        // Fixed-layout key slice; no heap allocation.
+        sk.copy_from_slice(&dk[..POLY_VECTOR_BYTES]);
         Self::decrypt(&MlKem512SecretKey(sk), ct)
     }
 
@@ -258,16 +271,21 @@ impl FoPke for MlKem512Pke {
         let expected_bytes = Self::ciphertext_bytes(&expected);
         let ct_bytes = Self::ciphertext_bytes(ct);
 
-        if expected_bytes == ct_bytes {
-            let mut ss = [0u8; 32];
-            ss.copy_from_slice(&kr[..32]);
-            Ok(ss)
-        } else {
-            let mut fallback_input = Vec::with_capacity(32 + ct_bytes.len());
-            fallback_input.extend_from_slice(&z);
-            fallback_input.extend_from_slice(ct_bytes);
-            Ok(crypto::shake256(&fallback_input))
+        // ML-KEM decapsulation must not reveal whether re-encryption matched.
+        // Compare and select with `subtle` so the success bit does not drive a
+        // short-circuit equality check or a secret-dependent branch.
+        let valid = expected_bytes.ct_eq(ct_bytes);
+        let mut fallback_input = [0u8; 32 + CIPHERTEXT_BYTES];
+        fallback_input[..32].copy_from_slice(&z);
+        fallback_input[32..].copy_from_slice(ct_bytes);
+        let fallback_ss: [u8; 32] = crypto::shake256(&fallback_input);
+
+        let mut ss = [0u8; 32];
+        // Secret choice: select without branching.
+        for i in 0..32 {
+            ss[i] = u8::conditional_select(&fallback_ss[i], &kr[i], valid);
         }
+        Ok(ss)
     }
 }
 

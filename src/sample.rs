@@ -1,27 +1,14 @@
 //! SHAKE-based matrix and noise sampling for ML-KEM-512.
-//!
-//! ```
-//! use jkem::sample::{sample_matrix, sample_noise};
-//!
-//! let seed = [7u8; 32];
-//! let noise = sample_noise(&seed, 0, 3)?;
-//! let matrix = sample_matrix(&seed, false)?;
-//!
-//! assert_eq!(noise.coeffs().len(), 256);
-//! assert_eq!(matrix.len(), 2);
-//!
-//! # Ok::<(), jkem::JkemError>(())
-//! ```
-
-pub mod crypto;
 
 use crate::{
+    crypto,
     error::{JkemError, Result},
     math::ring::{Poly, PolyMatrix},
     params::{N, Q},
 };
 
-pub fn sample_matrix(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix> {
+pub(crate) fn sample_matrix(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix> {
+    // Public algorithm branch: A vs A^T.
     Ok(core::array::from_fn(|i| {
         core::array::from_fn(|j| {
             if transpose {
@@ -33,7 +20,8 @@ pub fn sample_matrix(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix> {
     }))
 }
 
-pub fn sample_noise(_seed: &[u8; 32], _nonce: u8, _eta: usize) -> Result<Poly> {
+pub(crate) fn sample_noise(_seed: &[u8; 32], _nonce: u8, _eta: usize) -> Result<Poly> {
+    // Public parameter branch.
     match _eta {
         2 => Ok(cbd::<2>(&noise_bytes::<128>(_seed, _nonce))),
         3 => Ok(cbd::<3>(&noise_bytes::<192>(_seed, _nonce))),
@@ -64,7 +52,8 @@ fn cbd<const ETA: usize>(bytes: &[u8]) -> Poly {
         }
 
         let value = a - b;
-        *coeff = if value < 0 { value + Q } else { value };
+        // Secret sign: mask instead of branch.
+        *coeff = value + ((value >> 15) & Q);
     }
 
     Poly::new(coeffs)
@@ -75,6 +64,7 @@ fn bit(bytes: &[u8], bit_index: usize) -> u8 {
 }
 
 fn sample_uniform(rho: &[u8; 32], x: u8, y: u8) -> Poly {
+    // Public rejection sampler; rho is not secret.
     let mut input = [0u8; 34];
     input[..32].copy_from_slice(rho);
     input[32] = x;

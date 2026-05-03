@@ -1,25 +1,8 @@
 //! Number theoretic transform helpers for ML-KEM polynomial multiplication.
-//!
-//! ```
-//! use jkem::math::{Poly, mul_naive};
-//! use jkem::math::ntt::multiply;
-//! use jkem::params::N;
-//!
-//! let mut a = [0i16; N];
-//! let mut b = [0i16; N];
-//! a[0] = 7;
-//! b[0] = 11;
-//!
-//! let a = Poly::new(a);
-//! let b = Poly::new(b);
-//! assert_eq!(multiply(&a, &b)?, mul_naive(&a, &b));
-//!
-//! # Ok::<(), jkem::JkemError>(())
-//! ```
 
 use crate::{
     error::Result,
-    math::ring::Poly,
+    math::ring::{Poly, reduce},
     params::{N, Q},
 };
 
@@ -40,7 +23,7 @@ const ZETAS: [i16; 128] = [
     -1530, -1278, 794, -1510, -854, -870, 478, -108, -308, 996, 991, 958, -1460, 1522, 1628,
 ];
 
-pub fn ntt(_poly: &mut Poly) -> Result<()> {
+fn ntt(_poly: &mut Poly) -> Result<()> {
     let r = _poly.coeffs_mut();
     let mut k = 1;
     let mut len = 128;
@@ -66,7 +49,7 @@ pub fn ntt(_poly: &mut Poly) -> Result<()> {
     Ok(())
 }
 
-pub fn inverse_ntt(_poly: &mut Poly) -> Result<()> {
+fn inverse_ntt(_poly: &mut Poly) -> Result<()> {
     let r = _poly.coeffs_mut();
     let mut k = 127usize;
     let mut len = 2;
@@ -95,7 +78,8 @@ pub fn inverse_ntt(_poly: &mut Poly) -> Result<()> {
     Ok(())
 }
 
-pub fn multiply(lhs: &Poly, rhs: &Poly) -> Result<Poly> {
+#[cfg(test)]
+pub(crate) fn multiply(lhs: &Poly, rhs: &Poly) -> Result<Poly> {
     let mut lhs_hat = lhs.clone();
     let mut rhs_hat = rhs.clone();
     ntt(&mut lhs_hat)?;
@@ -105,19 +89,19 @@ pub fn multiply(lhs: &Poly, rhs: &Poly) -> Result<Poly> {
     Ok(Poly::new(*product.coeffs()))
 }
 
-pub fn to_ntt(poly: &Poly) -> Result<Poly> {
+pub(crate) fn to_ntt(poly: &Poly) -> Result<Poly> {
     let mut out = poly.clone();
     ntt(&mut out)?;
     Ok(out)
 }
 
-pub fn from_ntt(poly: &Poly) -> Result<Poly> {
+pub(crate) fn from_ntt(poly: &Poly) -> Result<Poly> {
     let mut out = poly.clone();
     inverse_ntt(&mut out)?;
     Ok(Poly::new(*out.coeffs()))
 }
 
-pub fn basemul(lhs: &Poly, rhs: &Poly) -> Poly {
+pub(crate) fn basemul(lhs: &Poly, rhs: &Poly) -> Poly {
     let mut out = [0i16; N];
     let a = lhs.coeffs();
     let b = rhs.coeffs();
@@ -141,7 +125,7 @@ pub fn basemul(lhs: &Poly, rhs: &Poly) -> Poly {
     Poly::new(out)
 }
 
-pub fn to_mont(poly: &Poly) -> Poly {
+pub(crate) fn to_mont(poly: &Poly) -> Poly {
     let mut out = [0i16; N];
     for (dst, &coeff) in out.iter_mut().zip(poly.coeffs()) {
         *dst = reduce_to_field(fqmul(coeff, 1353));
@@ -172,17 +156,13 @@ fn barrett_reduce(a: i16) -> i16 {
 }
 
 fn reduce_to_field(a: i16) -> i16 {
-    let mut r = a % Q;
-    if r < 0 {
-        r += Q;
-    }
-    r
+    reduce(a)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{math::mul_naive, params::N};
+    use crate::{math::ring::mul_naive, params::N};
 
     #[test]
     fn multiply_matches_naive_oracle() {

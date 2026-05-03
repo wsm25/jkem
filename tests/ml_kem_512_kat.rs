@@ -1,11 +1,15 @@
 use jkem::{
-    fo::MlKem512,
+    MlKem512,
     params::{
         CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, SHARED_SECRET_BYTES,
     },
     pke::MlKem512Ciphertext,
 };
 use sha2::{Digest, Sha256};
+use sha3::{
+    Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
 
 const KAT: &str = include_str!("data/ml_kem_512.kat");
 const KAT_SHA256: &str = "ff4efa2b73bafc459d6fb0557d90b05c4bc50cf5d02e30b383edf2e88fa969d8";
@@ -74,6 +78,30 @@ fn ml_kem_512_decaps_matches_kat() {
 
         assert_eq!(ss, case.ss, "case {idx}: ss mismatch");
     }
+}
+
+#[test]
+fn ml_kem_512_decaps_uses_fallback_for_modified_ciphertexts() {
+    let case = parse_kat(KAT).remove(0);
+    for index in [0, CIPHERTEXT_BYTES / 2, CIPHERTEXT_BYTES - 1] {
+        let mut modified = case.ct;
+        modified[index] ^= 1;
+
+        let ss = MlKem512::decaps(&case.sk, &MlKem512Ciphertext(modified)).unwrap();
+
+        let mut fallback_input = [0u8; 32 + CIPHERTEXT_BYTES];
+        fallback_input[..32].copy_from_slice(&case.z);
+        fallback_input[32..].copy_from_slice(&modified);
+        assert_eq!(ss, shake256(&fallback_input), "modified byte {index}");
+    }
+}
+
+fn shake256<const N: usize>(input: &[u8]) -> [u8; N] {
+    let mut output = [0u8; N];
+    let mut hasher = Shake256::default();
+    hasher.update(input);
+    hasher.finalize_xof().read(&mut output);
+    output
 }
 
 fn parse_kat(input: &str) -> Vec<KatCase> {

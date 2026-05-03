@@ -6,12 +6,8 @@
 //! ```
 //! use jkem::fo::MlKem512;
 //!
-//! let d = [3u8; 32];
-//! let z = [4u8; 32];
-//! let message = [5u8; 32];
-//!
-//! let (ek, dk) = MlKem512::keygen_with_seed(&d, &z)?;
-//! let (ct, ss) = MlKem512::encaps_with_message(&ek, &message)?;
+//! let (ek, dk) = MlKem512::keygen()?;
+//! let (ct, ss) = MlKem512::encaps(&ek)?;
 //! assert_eq!(MlKem512::decaps(&dk, &ct)?, ss);
 //!
 //! # Ok::<(), jkem::JkemError>(())
@@ -39,9 +35,10 @@ impl<P: FoPke> Fo<P> {
         let mut z = [0u8; 32];
         getrandom::fill(&mut d)?;
         getrandom::fill(&mut z)?;
-        Self::keygen_with_seed(&d, &z)
+        P::pke_keygen_from_dz(&d, &z)
     }
 
+    #[doc(hidden)]
     pub fn keygen_with_seed(
         d: &[u8; 32],
         z: &[u8; 32],
@@ -57,9 +54,10 @@ impl<P: FoPke> Fo<P> {
     ) -> Result<(<P as Pke>::Ciphertext, <P as FoPke>::SharedSecret)> {
         let mut message = [0u8; 32];
         getrandom::fill(&mut message)?;
-        Self::encaps_with_message(ek, &message)
+        P::encaps_with_message_fo(ek, &message)
     }
 
+    #[doc(hidden)]
     pub fn encaps_with_message(
         ek: &<P as FoPke>::EncapsulationKey,
         message: &[u8; 32],
