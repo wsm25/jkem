@@ -1,9 +1,8 @@
 use jkem::{
-    MlKem512,
+    Fo, JkemError, MlKem512,
     params::{
         CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, SHARED_SECRET_BYTES,
     },
-    pke::MlKem512Ciphertext,
 };
 use sha2::{Digest, Sha256};
 use sha3::{
@@ -15,7 +14,6 @@ const KAT: &str = include_str!("data/ml_kem_512.kat");
 const KAT_SHA256: &str = "ff4efa2b73bafc459d6fb0557d90b05c4bc50cf5d02e30b383edf2e88fa969d8";
 const KAT_CASES: usize = 100;
 
-#[derive(Debug)]
 struct KatCase {
     d: [u8; 32],
     z: [u8; 32],
@@ -38,8 +36,8 @@ fn ml_kem_512_kat_file_is_present_and_unchanged() {
 #[test]
 fn ml_kem_512_fo_round_trips_with_fixed_inputs() {
     let case = parse_kat(KAT).remove(0);
-    let (ek, dk) = MlKem512::keygen_with_seed(&case.d, &case.z).unwrap();
-    let (ct, ss) = MlKem512::encaps_with_message(&ek, &case.m).unwrap();
+    let (ek, dk) = unsafe { MlKem512::keygen_with_seed(&case.d, &case.z) }.unwrap();
+    let (ct, ss) = unsafe { MlKem512::encaps_with_message(&ek, &case.m) }.unwrap();
     let decapsulated = MlKem512::decaps(&dk, &ct).unwrap();
 
     assert_eq!(decapsulated, ss);
@@ -48,7 +46,7 @@ fn ml_kem_512_fo_round_trips_with_fixed_inputs() {
 #[test]
 fn ml_kem_512_keygen_matches_kat() {
     for (idx, case) in parse_kat(KAT).iter().enumerate() {
-        let (ek, dk) = MlKem512::keygen_with_seed(&case.d, &case.z)
+        let (ek, dk) = unsafe { MlKem512::keygen_with_seed(&case.d, &case.z) }
             .unwrap_or_else(|err| panic!("case {idx}: keygen failed: {err}"));
 
         assert_eq!(ek, case.pk, "case {idx}: pk mismatch");
@@ -60,10 +58,10 @@ fn ml_kem_512_keygen_matches_kat() {
 fn ml_kem_512_encaps_matches_kat() {
     for (idx, case) in parse_kat(KAT).iter().enumerate() {
         let ek = case.pk;
-        let (ct, ss) = MlKem512::encaps_with_message(&ek, &case.m)
+        let (ct, ss) = unsafe { MlKem512::encaps_with_message(&ek, &case.m) }
             .unwrap_or_else(|err| panic!("case {idx}: encaps failed: {err}"));
 
-        assert_eq!(ct.0, case.ct, "case {idx}: ct mismatch");
+        assert_eq!(ct, case.ct, "case {idx}: ct mismatch");
         assert_eq!(ss, case.ss, "case {idx}: ss mismatch");
     }
 }
@@ -72,7 +70,7 @@ fn ml_kem_512_encaps_matches_kat() {
 fn ml_kem_512_decaps_matches_kat() {
     for (idx, case) in parse_kat(KAT).iter().enumerate() {
         let dk = case.sk;
-        let ct = MlKem512Ciphertext(case.ct);
+        let ct = case.ct;
         let ss = MlKem512::decaps(&dk, &ct)
             .unwrap_or_else(|err| panic!("case {idx}: decaps failed: {err}"));
 
@@ -87,13 +85,51 @@ fn ml_kem_512_decaps_uses_fallback_for_modified_ciphertexts() {
         let mut modified = case.ct;
         modified[index] ^= 1;
 
-        let ss = MlKem512::decaps(&case.sk, &MlKem512Ciphertext(modified)).unwrap();
+        let ss = MlKem512::decaps(&case.sk, &modified).unwrap();
 
         let mut fallback_input = [0u8; 32 + CIPHERTEXT_BYTES];
         fallback_input[..32].copy_from_slice(&case.z);
         fallback_input[32..].copy_from_slice(&modified);
         assert_eq!(ss, shake256(&fallback_input), "modified byte {index}");
     }
+}
+
+#[test]
+fn ml_kem_512_encaps_rejects_non_canonical_public_key_coefficients() {
+    let case = parse_kat(KAT).remove(0);
+    let mut ek = case.pk;
+    ek[0] = 0x01;
+    ek[1] = 0x0d;
+
+    let err = match unsafe { MlKem512::encaps_with_message(&ek, &case.m) } {
+        Ok(_) => panic!("encapsulation accepted non-canonical public key"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err,
+        JkemError::InvalidParameter {
+            name: "encapsulation key",
+            message: "encoded coefficient is not in [0, q)",
+        }
+    );
+}
+
+#[test]
+fn ml_kem_512_decaps_rejects_decapsulation_key_with_wrong_public_key_hash() {
+    let case = parse_kat(KAT).remove(0);
+    let mut dk = case.sk;
+    dk[1568] ^= 1;
+
+    let err = MlKem512::decaps(&dk, &case.ct).unwrap_err();
+
+    assert_eq!(
+        err,
+        JkemError::InvalidParameter {
+            name: "decapsulation key",
+            message: "stored H(ek) does not match ek",
+        }
+    );
 }
 
 fn shake256<const N: usize>(input: &[u8]) -> [u8; N] {

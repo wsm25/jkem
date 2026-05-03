@@ -2,7 +2,7 @@
 
 use crate::params::{K, N, Q};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct Poly {
     coeffs: [i16; N],
 }

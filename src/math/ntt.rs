@@ -176,6 +176,9 @@ mod tests {
         let lhs = Poly::new(lhs);
         let rhs = Poly::new(rhs);
 
-        assert_eq!(multiply(&lhs, &rhs).unwrap(), mul_naive(&lhs, &rhs));
+        assert_eq!(
+            multiply(&lhs, &rhs).unwrap().coeffs(),
+            mul_naive(&lhs, &rhs).coeffs()
+        );
     }
 }

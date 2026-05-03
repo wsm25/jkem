@@ -80,6 +80,21 @@ pub(crate) fn decode_poly(bytes: &[u8], bits: usize) -> Result<Poly> {
     Ok(Poly::new(coeffs))
 }
 
+pub(crate) fn decode_poly_mod_q(bytes: &[u8], bits: usize, name: &'static str) -> Result<Poly> {
+    let values = decode(bytes, bits, N)?;
+    let mut coeffs = [0i16; N];
+    for (dst, src) in coeffs.iter_mut().zip(values) {
+        if src >= Q as u16 {
+            return Err(JkemError::InvalidParameter {
+                name,
+                message: "encoded coefficient is not in [0, q)",
+            });
+        }
+        *dst = src as i16;
+    }
+    Ok(Poly::new(coeffs))
+}
+
 pub(crate) fn encode_poly_vector(vector: &PolyVector, bits: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(K * (N * bits).div_ceil(8));
     for poly in vector {
@@ -113,6 +128,28 @@ pub(crate) fn decode_poly_vector(bytes: &[u8], bits: usize) -> Result<PolyVector
     ])
 }
 
+pub(crate) fn decode_poly_vector_mod_q(
+    bytes: &[u8],
+    bits: usize,
+    name: &'static str,
+) -> Result<PolyVector> {
+    let poly_bytes = (N * bits).div_ceil(8);
+    let expected = K * poly_bytes;
+    // Public length check.
+    if bytes.len() != expected {
+        return Err(JkemError::InvalidLength {
+            name: "encoded polyvec",
+            expected,
+            actual: bytes.len(),
+        });
+    }
+
+    Ok([
+        decode_poly_mod_q(&bytes[..poly_bytes], bits, name)?,
+        decode_poly_mod_q(&bytes[poly_bytes..], bits, name)?,
+    ])
+}
+
 pub(crate) fn encode_public_key(
     t_hat: &PolyVector,
     rho: &[u8; 32],
@@ -126,7 +163,7 @@ pub(crate) fn encode_public_key(
 pub(crate) fn decode_public_key(
     bytes: &[u8; POLY_VECTOR_BYTES + 32],
 ) -> Result<(PolyVector, [u8; 32])> {
-    let t_hat = decode_poly_vector(&bytes[..POLY_VECTOR_BYTES], 12)?;
+    let t_hat = decode_poly_vector_mod_q(&bytes[..POLY_VECTOR_BYTES], 12, "encapsulation key")?;
     let mut rho = [0u8; 32];
     rho.copy_from_slice(&bytes[POLY_VECTOR_BYTES..]);
     Ok((t_hat, rho))
@@ -253,7 +290,7 @@ mod tests {
         let poly = Poly::new(coeffs);
         let encoded = encode_poly(&poly, 12);
         let decoded = decode_poly(&encoded, 12).unwrap();
-        assert_eq!(decoded, poly);
+        assert_eq!(decoded.coeffs(), poly.coeffs());
     }
 
     #[test]
@@ -269,6 +306,8 @@ mod tests {
         let encoded = encode_poly_vector(&vector, 12);
         assert_eq!(encoded.len(), POLY_VECTOR_BYTES);
         let decoded = decode_poly_vector(&encoded, 12).unwrap();
-        assert_eq!(decoded, vector);
+        for (lhs, rhs) in decoded.iter().zip(vector.iter()) {
+            assert_eq!(lhs.coeffs(), rhs.coeffs());
+        }
     }
 }

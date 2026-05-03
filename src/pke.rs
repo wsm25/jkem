@@ -1,25 +1,9 @@
 //! IND-CPA public-key encryption layer for ML-KEM-512.
-//!
-//! The KEM wrapper uses this module through the `FoPke` trait, while tests can
-//! still exercise deterministic PKE key generation, encryption, and decryption.
-//!
-//! ```
-//! use jkem::pke::{MlKem512Pke, Pke};
-//!
-//! let seed = [1u8; 32];
-//! let coins = [2u8; 32];
-//! let message = [0xa5u8; 32];
-//!
-//! let (pk, sk) = MlKem512Pke::keygen(&seed)?;
-//! let ct = MlKem512Pke::encrypt(&pk, &message, &coins)?;
-//! assert_eq!(MlKem512Pke::decrypt(&sk, &ct)?, message);
-//!
-//! # Ok::<(), jkem::JkemError>(())
-//! ```
 
 use crate::{
     crypto,
     error::Result,
+    fo::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform},
     math::{
         ntt::{basemul, from_ntt, to_mont, to_ntt},
         ring::{Poly, PolyVector, add, add_vector, sub},
@@ -30,80 +14,62 @@ use crate::{
     },
     sample::{sample_matrix, sample_noise},
     serialize::{decode_ciphertext, decode_public_key, encode_ciphertext, encode_public_key},
+    wipe::WipeBytes,
 };
-use subtle::{ConditionallySelectable, ConstantTimeEq};
+use zeroize::Zeroize;
 
-pub trait Pke {
-    type PublicKey;
-    type SecretKey;
-    type Ciphertext;
+pub trait Pke<
+    const EK: usize,
+    const SK: usize,
+    const CT: usize,
+    const SEED: usize,
+    const MSG: usize,
+    const COINS: usize,
+>
+{
+    /// Deterministic PKE key generation.
+    ///
+    /// # Safety
+    ///
+    /// This low-level primitive bypasses the KEM RNG wrapper. Callers must provide
+    /// a uniformly random, single-use seed from an approved entropy source.
+    unsafe fn keygen(seed: &[u8; SEED]) -> Result<([u8; EK], [u8; SK])>;
 
-    fn keygen(seed: &[u8; 32]) -> Result<(Self::PublicKey, Self::SecretKey)>;
+    /// Deterministic PKE encryption.
+    ///
+    /// # Safety
+    ///
+    /// This low-level primitive bypasses the KEM FO wrapper. `coins` must be
+    /// uniformly random, single-use, and derived exactly as required by ML-KEM
+    /// when used as part of the KEM.
+    unsafe fn encrypt(pk: &[u8; EK], message: &[u8; MSG], coins: &[u8; COINS]) -> Result<[u8; CT]>;
 
-    fn encrypt(
-        pk: &Self::PublicKey,
-        message: &[u8; 32],
-        coins: &[u8; 32],
-    ) -> Result<Self::Ciphertext>;
-
-    fn decrypt(sk: &Self::SecretKey, ct: &Self::Ciphertext) -> Result<[u8; 32]>;
+    fn decrypt(sk: &[u8; SK], ct: &[u8; CT]) -> Result<[u8; MSG]>;
 }
 
-pub trait FoPke: Pke {
-    type EncapsulationKey;
-    type DecapsulationKey;
-    type SharedSecret;
+pub struct MlKem512;
+pub type MlKem512Ciphertext = [u8; CIPHERTEXT_BYTES];
 
-    fn pke_keygen_from_dz(
-        d: &[u8; 32],
-        z: &[u8; 32],
-    ) -> Result<(Self::EncapsulationKey, Self::DecapsulationKey)>;
+pub struct MlKemFoTransform;
 
-    fn pke_encrypt_for_fo(
-        ek: &Self::EncapsulationKey,
-        message: &[u8; 32],
-        coins: &[u8; 32],
-    ) -> Result<Self::Ciphertext>;
-
-    fn pke_decrypt_for_fo(dk: &Self::DecapsulationKey, ct: &Self::Ciphertext) -> Result<[u8; 32]>;
-
-    fn ciphertext_bytes(ct: &Self::Ciphertext) -> &[u8];
-
-    fn encaps_with_message_fo(
-        ek: &Self::EncapsulationKey,
-        message: &[u8; 32],
-    ) -> Result<(Self::Ciphertext, Self::SharedSecret)>;
-
-    fn decaps_fo(dk: &Self::DecapsulationKey, ct: &Self::Ciphertext) -> Result<Self::SharedSecret>;
-}
-
-pub struct MlKem512Pke;
-
-pub struct MlKem512PublicKey(pub [u8; ENCAPSULATION_KEY_BYTES]);
-
-pub struct MlKem512SecretKey(pub [u8; POLY_VECTOR_BYTES]);
-
-pub struct MlKem512Ciphertext(pub [u8; CIPHERTEXT_BYTES]);
-
-impl Pke for MlKem512Pke {
-    type PublicKey = MlKem512PublicKey;
-    type SecretKey = MlKem512SecretKey;
-    type Ciphertext = MlKem512Ciphertext;
-
-    fn keygen(seed: &[u8; 32]) -> Result<(Self::PublicKey, Self::SecretKey)> {
+impl Pke<ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, CIPHERTEXT_BYTES, 32, 32, 32> for MlKem512 {
+    unsafe fn keygen(
+        seed: &[u8; 32],
+    ) -> Result<([u8; ENCAPSULATION_KEY_BYTES], [u8; POLY_VECTOR_BYTES])> {
         fn mont_vector(vector: &PolyVector) -> PolyVector {
             core::array::from_fn(|i| to_mont(&vector[i]))
         }
 
         // FIPS 203 expands d with the parameter k before sampling A, s, and e.
-        let mut seed_input = [0u8; 33];
+        let mut seed_input = WipeBytes::<33>::zeroed();
         seed_input[..32].copy_from_slice(seed);
         seed_input[32] = K as u8;
-        let expanded = crypto::sha3_512(&seed_input);
+        let mut expanded = crypto::sha3_512(&seed_input[..]);
         let mut rho = [0u8; 32];
-        let mut sigma = [0u8; 32];
+        let mut sigma = WipeBytes::<32>::zeroed();
         rho.copy_from_slice(&expanded[..32]);
         sigma.copy_from_slice(&expanded[32..]);
+        expanded.zeroize();
 
         // sample_matrix already returns the public matrix in the NTT domain, as
         // in the ML-KEM reference implementation.
@@ -124,16 +90,16 @@ impl Pke for MlKem512Pke {
         let t_hat = add_vector(&product_hat, &e_hat);
 
         Ok((
-            MlKem512PublicKey(encode_public_key(&t_hat, &rho)),
-            MlKem512SecretKey(crate::serialize::encode_secret_key(&s_hat)),
+            encode_public_key(&t_hat, &rho),
+            crate::serialize::encode_secret_key(&s_hat),
         ))
     }
 
-    fn encrypt(
-        pk: &Self::PublicKey,
+    unsafe fn encrypt(
+        pk: &[u8; ENCAPSULATION_KEY_BYTES],
         message: &[u8; 32],
         coins: &[u8; 32],
-    ) -> Result<Self::Ciphertext> {
+    ) -> Result<[u8; CIPHERTEXT_BYTES]> {
         fn from_ntt_vector(vector: &PolyVector) -> Result<PolyVector> {
             Ok([from_ntt(&vector[0])?, from_ntt(&vector[1])?])
         }
@@ -148,7 +114,7 @@ impl Pke for MlKem512Pke {
             Poly::new(coeffs)
         }
 
-        let (t_hat, rho) = decode_public_key(&pk.0)?;
+        let (t_hat, rho) = decode_public_key(pk)?;
         let a = sample_matrix(&rho, true)?;
         let r: PolyVector = [sample_noise(coins, 0, ETA1)?, sample_noise(coins, 1, ETA1)?];
         let e1: PolyVector = [
@@ -163,10 +129,10 @@ impl Pke for MlKem512Pke {
         let mut v = add(&from_ntt(&dot_ntt(&t_hat, &r_hat))?, &e2);
         v = add(&v, &message_to_poly(message));
 
-        Ok(MlKem512Ciphertext(encode_ciphertext(&u, &v)))
+        Ok(encode_ciphertext(&u, &v))
     }
 
-    fn decrypt(sk: &Self::SecretKey, ct: &Self::Ciphertext) -> Result<[u8; 32]> {
+    fn decrypt(sk: &[u8; POLY_VECTOR_BYTES], ct: &[u8; CIPHERTEXT_BYTES]) -> Result<[u8; 32]> {
         fn poly_to_message(poly: &Poly) -> [u8; 32] {
             fn ge_mask_u16(lhs: u16, rhs: u16) -> u16 {
                 // Branchless lhs >= rhs mask.
@@ -186,107 +152,128 @@ impl Pke for MlKem512Pke {
             message
         }
 
-        let s_hat = crate::serialize::decode_poly_vector(&sk.0, 12)?;
-        let (u, v) = decode_ciphertext(&ct.0)?;
+        let s_hat = crate::serialize::decode_poly_vector(sk, 12)?;
+        let (u, v) = decode_ciphertext(ct)?;
         let u_hat = ntt_vector(&u)?;
         let m_poly = sub(&v, &from_ntt(&dot_ntt(&s_hat, &u_hat))?);
         Ok(poly_to_message(&m_poly))
     }
 }
 
-impl FoPke for MlKem512Pke {
-    type EncapsulationKey = [u8; ENCAPSULATION_KEY_BYTES];
-    type DecapsulationKey = [u8; DECAPSULATION_KEY_BYTES];
-    type SharedSecret = [u8; SHARED_SECRET_BYTES];
-
-    fn pke_keygen_from_dz(
-        d: &[u8; 32],
+impl
+    FoTransform<
+        ENCAPSULATION_KEY_BYTES,
+        POLY_VECTOR_BYTES,
+        CIPHERTEXT_BYTES,
+        DECAPSULATION_KEY_BYTES,
+        SHARED_SECRET_BYTES,
+        32,
+        32,
+        32,
+    > for MlKemFoTransform
+{
+    fn pack_decapsulation_key(
+        sk: &[u8; POLY_VECTOR_BYTES],
+        ek: &[u8; ENCAPSULATION_KEY_BYTES],
         z: &[u8; 32],
-    ) -> Result<(Self::EncapsulationKey, Self::DecapsulationKey)> {
-        let (pk, sk) = Self::keygen(d)?;
-        let h_pk = crypto::sha3_256(&pk.0);
+    ) -> Result<[u8; DECAPSULATION_KEY_BYTES]> {
+        let h = crypto::sha3_256(ek);
         let mut dk = [0u8; DECAPSULATION_KEY_BYTES];
-        dk[..POLY_VECTOR_BYTES].copy_from_slice(&sk.0);
-        dk[768..1568].copy_from_slice(&pk.0);
-        dk[1568..1600].copy_from_slice(&h_pk);
-        dk[1600..].copy_from_slice(z);
-        Ok((pk.0, dk))
+        dk[..POLY_VECTOR_BYTES].copy_from_slice(sk);
+        dk[POLY_VECTOR_BYTES..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES].copy_from_slice(ek);
+        dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES
+            ..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32]
+            .copy_from_slice(&h);
+        dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32..].copy_from_slice(z);
+        Ok(dk)
     }
 
-    fn pke_encrypt_for_fo(
-        ek: &Self::EncapsulationKey,
-        message: &[u8; 32],
-        coins: &[u8; 32],
-    ) -> Result<Self::Ciphertext> {
-        Self::encrypt(&MlKem512PublicKey(*ek), message, coins)
-    }
+    fn unpack_decapsulation_key(
+        dk: &[u8; DECAPSULATION_KEY_BYTES],
+    ) -> Result<DecapsulationKeyParts<'_, ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, 32>> {
+        use subtle::ConstantTimeEq;
 
-    fn pke_decrypt_for_fo(dk: &Self::DecapsulationKey, ct: &Self::Ciphertext) -> Result<[u8; 32]> {
-        let mut sk = [0u8; POLY_VECTOR_BYTES];
-        // Fixed-layout key slice; no heap allocation.
-        sk.copy_from_slice(&dk[..POLY_VECTOR_BYTES]);
-        Self::decrypt(&MlKem512SecretKey(sk), ct)
-    }
-
-    fn ciphertext_bytes(ct: &Self::Ciphertext) -> &[u8] {
-        &ct.0
-    }
-
-    fn encaps_with_message_fo(
-        ek: &Self::EncapsulationKey,
-        message: &[u8; 32],
-    ) -> Result<(Self::Ciphertext, Self::SharedSecret)> {
-        // ML-KEM.Encaps derives both K and the encryption coins from
-        // H(m || H(ek)); the public randomized API supplies m randomly.
-        let mut preimage = [0u8; 64];
-        preimage[..32].copy_from_slice(message);
-        preimage[32..].copy_from_slice(&crypto::sha3_256(ek));
-        let kr = crypto::sha3_512(&preimage);
-        let mut coins = [0u8; 32];
-        coins.copy_from_slice(&kr[32..]);
-        let ct = Self::pke_encrypt_for_fo(ek, message, &coins)?;
-        let mut ss = [0u8; 32];
-        ss.copy_from_slice(&kr[..32]);
-        Ok((ct, ss))
-    }
-
-    fn decaps_fo(dk: &Self::DecapsulationKey, ct: &Self::Ciphertext) -> Result<Self::SharedSecret> {
-        // The ML-KEM decapsulation key layout is dkPKE || ek || H(ek) || z.
-        let mut ek = [0u8; ENCAPSULATION_KEY_BYTES];
-        ek.copy_from_slice(&dk[768..1568]);
-        let mut h = [0u8; 32];
-        h.copy_from_slice(&dk[1568..1600]);
-        let mut z = [0u8; 32];
-        z.copy_from_slice(&dk[1600..]);
-
-        let message = Self::pke_decrypt_for_fo(dk, ct)?;
-        let mut preimage = [0u8; 64];
-        preimage[..32].copy_from_slice(&message);
-        preimage[32..].copy_from_slice(&h);
-        let kr = crypto::sha3_512(&preimage);
-        let mut coins = [0u8; 32];
-        coins.copy_from_slice(&kr[32..]);
-        let expected = Self::pke_encrypt_for_fo(&ek, &message, &coins)?;
-
-        let expected_bytes = Self::ciphertext_bytes(&expected);
-        let ct_bytes = Self::ciphertext_bytes(ct);
-
-        // ML-KEM decapsulation must not reveal whether re-encryption matched.
-        // Compare and select with `subtle` so the success bit does not drive a
-        // short-circuit equality check or a secret-dependent branch.
-        let valid = expected_bytes.ct_eq(ct_bytes);
-        let mut fallback_input = [0u8; 32 + CIPHERTEXT_BYTES];
-        fallback_input[..32].copy_from_slice(&z);
-        fallback_input[32..].copy_from_slice(ct_bytes);
-        let fallback_ss: [u8; 32] = crypto::shake256(&fallback_input);
-
-        let mut ss = [0u8; 32];
-        // Secret choice: select without branching.
-        for i in 0..32 {
-            ss[i] = u8::conditional_select(&fallback_ss[i], &kr[i], valid);
+        let sk: &[u8; POLY_VECTOR_BYTES] = (&dk[..POLY_VECTOR_BYTES])
+            .try_into()
+            .expect("fixed-layout decapsulation key contains a PKE secret key");
+        let ek: &[u8; ENCAPSULATION_KEY_BYTES] = (&dk
+            [POLY_VECTOR_BYTES..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES])
+            .try_into()
+            .expect("fixed-layout decapsulation key contains an encapsulation key");
+        let h: &[u8; 32] = (&dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES
+            ..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32])
+            .try_into()
+            .expect("fixed-layout decapsulation key contains H(ek)");
+        if crypto::sha3_256(ek).ct_ne(h).into() {
+            return Err(crate::error::JkemError::InvalidParameter {
+                name: "decapsulation key",
+                message: "stored H(ek) does not match ek",
+            });
         }
-        Ok(ss)
+        let z: &[u8; 32] = (&dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32..])
+            .try_into()
+            .expect("fixed-layout decapsulation key contains z");
+
+        Ok(DecapsulationKeyParts { sk, ek, z })
     }
+
+    fn derive_encapsulation(
+        ek: &[u8; ENCAPSULATION_KEY_BYTES],
+        message: &[u8; 32],
+    ) -> Result<FoDerivation<SHARED_SECRET_BYTES, 32>> {
+        derive_ml_kem_success(ek, message)
+    }
+
+    fn derive_decapsulation(
+        parts: &DecapsulationKeyParts<'_, ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, 32>,
+        message: &[u8; 32],
+    ) -> Result<FoDerivation<SHARED_SECRET_BYTES, 32>> {
+        derive_ml_kem_success(parts.ek, message)
+    }
+
+    fn derive_decapsulation_failure(
+        parts: &DecapsulationKeyParts<'_, ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, 32>,
+        ct: &[u8; CIPHERTEXT_BYTES],
+    ) -> Result<[u8; SHARED_SECRET_BYTES]> {
+        let mut input = vec![0u8; 32 + CIPHERTEXT_BYTES];
+        input[..32].copy_from_slice(parts.z);
+        input[32..].copy_from_slice(ct);
+        Ok(crypto::shake256(&input))
+    }
+}
+
+impl
+    Fo<
+        ENCAPSULATION_KEY_BYTES,
+        POLY_VECTOR_BYTES,
+        CIPHERTEXT_BYTES,
+        DECAPSULATION_KEY_BYTES,
+        SHARED_SECRET_BYTES,
+        32,
+        32,
+        32,
+        32,
+    > for MlKem512
+{
+    type Transform = MlKemFoTransform;
+}
+
+fn derive_ml_kem_success(
+    ek: &[u8; ENCAPSULATION_KEY_BYTES],
+    message: &[u8; 32],
+) -> Result<FoDerivation<SHARED_SECRET_BYTES, 32>> {
+    // ML-KEM.Encaps derives both K and the encryption coins from
+    // H(m || H(ek)); the public randomized API supplies m randomly.
+    let mut preimage = WipeBytes::<64>::zeroed();
+    preimage[..32].copy_from_slice(message);
+    preimage[32..].copy_from_slice(&crypto::sha3_256(ek));
+    let mut kr = crypto::sha3_512(&preimage[..]);
+    let mut shared_secret = [0u8; SHARED_SECRET_BYTES];
+    let mut coins = [0u8; 32];
+    shared_secret.copy_from_slice(&kr[..SHARED_SECRET_BYTES]);
+    coins.copy_from_slice(&kr[SHARED_SECRET_BYTES..SHARED_SECRET_BYTES + 32]);
+    kr.zeroize();
+    Ok(FoDerivation::new(shared_secret, coins))
 }
 
 fn ntt_vector(vector: &PolyVector) -> Result<PolyVector> {
@@ -318,9 +305,37 @@ mod tests {
         let coins = [2u8; 32];
         let message = [0xa5u8; 32];
 
-        let (pk, sk) = MlKem512Pke::keygen(&seed).unwrap();
-        let ct = MlKem512Pke::encrypt(&pk, &message, &coins).unwrap();
-        let decrypted = MlKem512Pke::decrypt(&sk, &ct).unwrap();
+        let (pk, sk) = unsafe {
+            <MlKem512 as Pke<
+                ENCAPSULATION_KEY_BYTES,
+                POLY_VECTOR_BYTES,
+                CIPHERTEXT_BYTES,
+                32,
+                32,
+                32,
+            >>::keygen(&seed)
+        }
+        .unwrap();
+        let ct = unsafe {
+            <MlKem512 as Pke<
+                ENCAPSULATION_KEY_BYTES,
+                POLY_VECTOR_BYTES,
+                CIPHERTEXT_BYTES,
+                32,
+                32,
+                32,
+            >>::encrypt(&pk, &message, &coins)
+        }
+        .unwrap();
+        let decrypted = <MlKem512 as Pke<
+            ENCAPSULATION_KEY_BYTES,
+            POLY_VECTOR_BYTES,
+            CIPHERTEXT_BYTES,
+            32,
+            32,
+            32,
+        >>::decrypt(&sk, &ct)
+        .unwrap();
 
         assert_eq!(decrypted, message);
     }
@@ -331,9 +346,46 @@ mod tests {
         let z = [4u8; 32];
         let message = [0x5au8; 32];
 
-        let (ek, dk) = <MlKem512Pke as FoPke>::pke_keygen_from_dz(&d, &z).unwrap();
-        let (ct, ss) = <MlKem512Pke as FoPke>::encaps_with_message_fo(&ek, &message).unwrap();
-        let decapsulated = <MlKem512Pke as FoPke>::decaps_fo(&dk, &ct).unwrap();
+        let (ek, dk) = unsafe {
+            <MlKem512 as Fo<
+                ENCAPSULATION_KEY_BYTES,
+                POLY_VECTOR_BYTES,
+                CIPHERTEXT_BYTES,
+                DECAPSULATION_KEY_BYTES,
+                SHARED_SECRET_BYTES,
+                32,
+                32,
+                32,
+                32,
+            >>::keygen_with_seed(&d, &z)
+        }
+        .unwrap();
+        let (ct, ss) = unsafe {
+            <MlKem512 as Fo<
+                ENCAPSULATION_KEY_BYTES,
+                POLY_VECTOR_BYTES,
+                CIPHERTEXT_BYTES,
+                DECAPSULATION_KEY_BYTES,
+                SHARED_SECRET_BYTES,
+                32,
+                32,
+                32,
+                32,
+            >>::encaps_with_message(&ek, &message)
+        }
+        .unwrap();
+        let decapsulated = <MlKem512 as Fo<
+            ENCAPSULATION_KEY_BYTES,
+            POLY_VECTOR_BYTES,
+            CIPHERTEXT_BYTES,
+            DECAPSULATION_KEY_BYTES,
+            SHARED_SECRET_BYTES,
+            32,
+            32,
+            32,
+            32,
+        >>::decaps(&dk, &ct)
+        .unwrap();
 
         assert_eq!(decapsulated, ss);
     }

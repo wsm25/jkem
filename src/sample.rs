@@ -114,7 +114,7 @@ mod tests {
         let seed = [7u8; 32];
         let lhs = sample_noise(&seed, 3, 2).unwrap();
         let rhs = sample_noise(&seed, 3, 2).unwrap();
-        assert_eq!(lhs, rhs);
+        assert_eq!(lhs.coeffs(), rhs.coeffs());
     }
 
     #[test]
@@ -122,7 +122,7 @@ mod tests {
         let seed = [7u8; 32];
         let lhs = sample_noise(&seed, 3, 2).unwrap();
         let rhs = sample_noise(&seed, 4, 2).unwrap();
-        assert_ne!(lhs, rhs);
+        assert_ne!(lhs.coeffs(), rhs.coeffs());
     }
 
     #[test]
@@ -137,7 +137,10 @@ mod tests {
     #[test]
     fn sample_noise_rejects_invalid_eta() {
         let seed = [0u8; 32];
-        let err = sample_noise(&seed, 0, 4).unwrap_err();
+        let err = match sample_noise(&seed, 0, 4) {
+            Ok(_) => panic!("invalid eta was accepted"),
+            Err(err) => err,
+        };
         assert_eq!(
             err,
             JkemError::InvalidParameter {
@@ -156,8 +159,8 @@ mod tests {
 
         for i in 0..crate::params::K {
             for j in 0..crate::params::K {
-                assert_eq!(matrix[i][j], again[i][j]);
-                assert_eq!(matrix[i][j], transposed[j][i]);
+                assert_eq!(matrix[i][j].coeffs(), again[i][j].coeffs());
+                assert_eq!(matrix[i][j].coeffs(), transposed[j][i].coeffs());
             }
         }
     }
