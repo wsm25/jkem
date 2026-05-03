@@ -1,10 +1,10 @@
 //! SHAKE-based matrix and noise sampling for ML-KEM-512.
 
 use crate::{
-    crypto,
     error::{JkemError, Result},
     math::ring::{Poly, PolyMatrix},
     params::{N, Q},
+    security::crypto,
 };
 
 pub(crate) fn sample_matrix(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix> {

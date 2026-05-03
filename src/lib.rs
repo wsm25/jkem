@@ -28,16 +28,14 @@
 //! # Ok::<(), jkem::JkemError>(())
 //! ```
 
-mod crypto;
 pub mod error;
-pub(crate) mod fo;
 mod math;
-pub mod params;
-pub(crate) mod pke;
-mod sample;
-mod serialize;
-mod wipe;
+mod mlkem;
+mod security;
+mod traits;
 
 pub use error::{JkemError, Result};
-pub use fo::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform};
-pub use pke::{MlKem512, MlKem512Ciphertext, MlKemFoTransform, Pke};
+pub use mlkem::params;
+pub use mlkem::{MlKem512, MlKemFoTransform};
+pub use traits::pke::MlKem512Ciphertext;
+pub use traits::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform, Pke};

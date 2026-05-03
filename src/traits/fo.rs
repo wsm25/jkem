@@ -5,7 +5,7 @@
 //! secret selection. Concrete KEMs provide byte sizes, key layout, and
 //! hash/KDF choices through `FoTransform`.
 
-use crate::{error::Result, pke::Pke, wipe::WipeBytes};
+use crate::{error::Result, security::wipe::WipeBytes, traits::pke::Pke};
 use subtle::{ConditionallySelectable, ConstantTimeEq};
 
 pub struct DecapsulationKeyParts<'a, const EK: usize, const SK: usize, const Z: usize> {

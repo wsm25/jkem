@@ -1,9 +1,11 @@
 //! IND-CPA public-key encryption layer for ML-KEM-512.
 
+use super::serialize::{
+    decode_ciphertext, decode_poly_vector, decode_public_key, encode_ciphertext, encode_public_key,
+    encode_secret_key,
+};
 use crate::{
-    crypto,
     error::Result,
-    fo::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform},
     math::{
         ntt::{basemul, from_ntt, to_mont, to_ntt},
         ring::{Poly, PolyVector, add, add_vector, sub},
@@ -12,43 +14,19 @@ use crate::{
         CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, ETA1, ETA2, K,
         POLY_VECTOR_BYTES, Q, SHARED_SECRET_BYTES,
     },
-    sample::{sample_matrix, sample_noise},
-    serialize::{decode_ciphertext, decode_public_key, encode_ciphertext, encode_public_key},
-    wipe::WipeBytes,
+    security::{
+        crypto,
+        sample::{sample_matrix, sample_noise},
+        wipe::WipeBytes,
+    },
+    traits::{
+        fo::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform},
+        pke::Pke,
+    },
 };
 use zeroize::Zeroize;
 
-pub trait Pke<
-    const EK: usize,
-    const SK: usize,
-    const CT: usize,
-    const SEED: usize,
-    const MSG: usize,
-    const COINS: usize,
->
-{
-    /// Deterministic PKE key generation.
-    ///
-    /// # Safety
-    ///
-    /// This low-level primitive bypasses the KEM RNG wrapper. Callers must provide
-    /// a uniformly random, single-use seed from an approved entropy source.
-    unsafe fn keygen(seed: &[u8; SEED]) -> Result<([u8; EK], [u8; SK])>;
-
-    /// Deterministic PKE encryption.
-    ///
-    /// # Safety
-    ///
-    /// This low-level primitive bypasses the KEM FO wrapper. `coins` must be
-    /// uniformly random, single-use, and derived exactly as required by ML-KEM
-    /// when used as part of the KEM.
-    unsafe fn encrypt(pk: &[u8; EK], message: &[u8; MSG], coins: &[u8; COINS]) -> Result<[u8; CT]>;
-
-    fn decrypt(sk: &[u8; SK], ct: &[u8; CT]) -> Result<[u8; MSG]>;
-}
-
 pub struct MlKem512;
-pub type MlKem512Ciphertext = [u8; CIPHERTEXT_BYTES];
 
 pub struct MlKemFoTransform;
 
@@ -89,10 +67,7 @@ impl Pke<ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, CIPHERTEXT_BYTES, 32, 32, 3
         let product_hat = mont_vector(&matrix_vector_mul_ntt(&a, &s_hat));
         let t_hat = add_vector(&product_hat, &e_hat);
 
-        Ok((
-            encode_public_key(&t_hat, &rho),
-            crate::serialize::encode_secret_key(&s_hat),
-        ))
+        Ok((encode_public_key(&t_hat, &rho), encode_secret_key(&s_hat)))
     }
 
     unsafe fn encrypt(
@@ -152,7 +127,7 @@ impl Pke<ENCAPSULATION_KEY_BYTES, POLY_VECTOR_BYTES, CIPHERTEXT_BYTES, 32, 32, 3
             message
         }
 
-        let s_hat = crate::serialize::decode_poly_vector(sk, 12)?;
+        let s_hat = decode_poly_vector(sk, 12)?;
         let (u, v) = decode_ciphertext(ct)?;
         let u_hat = ntt_vector(&u)?;
         let m_poly = sub(&v, &from_ntt(&dot_ntt(&s_hat, &u_hat))?);
