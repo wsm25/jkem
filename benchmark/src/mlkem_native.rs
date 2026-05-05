@@ -32,6 +32,7 @@ unsafe extern "C" {
     fn bench_mlkem_native1024_dec(ss: *mut u8, ct: *const u8, sk: *const u8) -> i32;
 }
 
+#[allow(clippy::missing_safety_doc)]
 pub trait NativeKemParams: jkem::params::MlKemParams {
     unsafe fn keypair_derand_raw(pk: *mut u8, sk: *mut u8, coins: *const u8) -> i32;
     unsafe fn enc_derand_raw(ct: *mut u8, ss: *mut u8, pk: *const u8, coins: *const u8) -> i32;

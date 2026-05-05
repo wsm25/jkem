@@ -3,3 +3,5 @@ Cargo.lock
 PLAN.md
 /target
 *draft.md
+__pycache__/
+report/

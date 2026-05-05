@@ -7,7 +7,7 @@ use hybrid_array::{
 };
 use jkem::{
     MlKem,
-    params::{MlKem512, MlKem768, MlKem1024, MlKemParams, SharedSecret},
+    params::{MlKem512, MlKem768, MlKem1024, MlKemParams, N},
 };
 use mlkem_bench::{
     bytes32, bytes64,
@@ -123,19 +123,29 @@ fn keygen_bytes<P>() -> u64
 where
     P: MlKemParams,
 {
-    (P::encapsulation_key_bytes() + P::decapsulation_key_bytes()) as u64
+    real_throughput_bytes::<P>(4, 0)
 }
 
 fn encaps_bytes<P>() -> u64
 where
     P: MlKemParams,
 {
-    (P::encapsulation_key_bytes() + P::ciphertext_bytes() + size_of::<SharedSecret>()) as u64
+    real_throughput_bytes::<P>(5, 1)
 }
 
 fn decaps_bytes<P>() -> u64
 where
     P: MlKemParams,
 {
-    (P::decapsulation_key_bytes() + P::ciphertext_bytes() + size_of::<SharedSecret>()) as u64
+    real_throughput_bytes::<P>(6, 1)
+}
+
+fn real_throughput_bytes<P>(linear_terms: usize, constant_terms: usize) -> u64
+where
+    P: MlKemParams,
+{
+    const COEFFICIENT_BYTES: usize = size_of::<i16>();
+    let k = P::k();
+    let poly_bytes = N * COEFFICIENT_BYTES;
+    (poly_bytes * (k * k + linear_terms * k + constant_terms)) as u64
 }
