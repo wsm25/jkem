@@ -3,7 +3,7 @@
 use crate::{
     error::{JkemError, Result},
     math::ring::{Poly, PolyVector, reduce},
-    params::{CIPHERTEXT_BYTES, DU, DV, K, N, POLY_VECTOR_BYTES, Q},
+    params::*,
 };
 
 pub(crate) fn compress(value: i16, bits: usize) -> u16 {

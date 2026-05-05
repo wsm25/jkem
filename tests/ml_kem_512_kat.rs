@@ -1,17 +1,11 @@
-use jkem::{
-    Fo, JkemError, MlKem512,
-    params::{
-        CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, SHARED_SECRET_BYTES,
-    },
-};
-use sha2::{Digest, Sha256};
+use jkem::{JkemError, MlKem512, MlKemInterface, params::*};
 use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
+    digest::{Digest, ExtendableOutput, Update, XofReader},
+    {Sha3_256, Shake256},
 };
 
 const KAT: &str = include_str!("data/ml_kem_512.kat");
-const KAT_SHA256: &str = "ff4efa2b73bafc459d6fb0557d90b05c4bc50cf5d02e30b383edf2e88fa969d8";
+const KAT_SHA256: &str = "a3fb26d2a4d555f190889f4f50d894fd5feb66276eb14786684f160f1e901fb1";
 const KAT_CASES: usize = 100;
 
 struct KatCase {
@@ -26,7 +20,7 @@ struct KatCase {
 
 #[test]
 fn ml_kem_512_kat_file_is_present_and_unchanged() {
-    let digest = Sha256::digest(KAT.as_bytes());
+    let digest = Sha3_256::digest(KAT.as_bytes());
     assert_eq!(hex::encode(digest), KAT_SHA256);
 
     let cases = parse_kat(KAT);
@@ -34,10 +28,10 @@ fn ml_kem_512_kat_file_is_present_and_unchanged() {
 }
 
 #[test]
-fn ml_kem_512_fo_round_trips_with_fixed_inputs() {
+fn ml_kem_512_internal_round_trips_with_fixed_inputs() {
     let case = parse_kat(KAT).remove(0);
-    let (ek, dk) = unsafe { MlKem512::keygen_with_seed(&case.d, &case.z) }.unwrap();
-    let (ct, ss) = unsafe { MlKem512::encaps_with_message(&ek, &case.m) }.unwrap();
+    let (ek, dk) = unsafe { MlKem512::keygen_internal(&case.d, &case.z) }.unwrap();
+    let (ct, ss) = unsafe { MlKem512::encaps_internal(&ek, &case.m) }.unwrap();
     let decapsulated = MlKem512::decaps(&dk, &ct).unwrap();
 
     assert_eq!(decapsulated, ss);
@@ -46,7 +40,7 @@ fn ml_kem_512_fo_round_trips_with_fixed_inputs() {
 #[test]
 fn ml_kem_512_keygen_matches_kat() {
     for (idx, case) in parse_kat(KAT).iter().enumerate() {
-        let (ek, dk) = unsafe { MlKem512::keygen_with_seed(&case.d, &case.z) }
+        let (ek, dk) = unsafe { MlKem512::keygen_internal(&case.d, &case.z) }
             .unwrap_or_else(|err| panic!("case {idx}: keygen failed: {err}"));
 
         assert_eq!(ek, case.pk, "case {idx}: pk mismatch");
@@ -58,7 +52,7 @@ fn ml_kem_512_keygen_matches_kat() {
 fn ml_kem_512_encaps_matches_kat() {
     for (idx, case) in parse_kat(KAT).iter().enumerate() {
         let ek = case.pk;
-        let (ct, ss) = unsafe { MlKem512::encaps_with_message(&ek, &case.m) }
+        let (ct, ss) = unsafe { MlKem512::encaps_internal(&ek, &case.m) }
             .unwrap_or_else(|err| panic!("case {idx}: encaps failed: {err}"));
 
         assert_eq!(ct, case.ct, "case {idx}: ct mismatch");
@@ -101,7 +95,7 @@ fn ml_kem_512_encaps_rejects_non_canonical_public_key_coefficients() {
     ek[0] = 0x01;
     ek[1] = 0x0d;
 
-    let err = match unsafe { MlKem512::encaps_with_message(&ek, &case.m) } {
+    let err = match unsafe { MlKem512::encaps_internal(&ek, &case.m) } {
         Ok(_) => panic!("encapsulation accepted non-canonical public key"),
         Err(err) => err,
     };

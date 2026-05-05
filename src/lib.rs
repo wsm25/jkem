@@ -1,7 +1,7 @@
 //! Teaching-oriented ML-KEM-512 implementation.
 //!
 //! This crate mirrors the standard construction: polynomial-ring arithmetic,
-//! SHA3/SHAKE sampling, IND-CPA PKE, then the FO-style KEM wrapper.
+//! SHA3/SHAKE sampling, K-PKE core arithmetic, then the ML-KEM control plane.
 //!
 //! Security scope: this implementation is for learning and testing, not
 //! production deployment. It avoids the main secret-dependent branches in
@@ -19,7 +19,7 @@
 //! wiping them when no longer needed.
 //!
 //! ```
-//! use jkem::{Fo, MlKem512};
+//! use jkem::{MlKem512, MlKemInternal};
 //!
 //! let (ek, dk) = MlKem512::keygen()?;
 //! let (ct, ss) = MlKem512::encaps(&ek)?;
@@ -30,12 +30,9 @@
 
 pub mod error;
 mod math;
-mod mlkem;
+pub mod mlkem;
 mod security;
-mod traits;
 
 pub use error::{JkemError, Result};
 pub use mlkem::params;
-pub use mlkem::{MlKem512, MlKemFoTransform};
-pub use traits::pke::MlKem512Ciphertext;
-pub use traits::{DecapsulationKeyParts, Fo, FoDerivation, FoTransform, Pke};
+pub use mlkem::{MlKem512, internal::MlKemInterface};

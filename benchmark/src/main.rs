@@ -1,12 +1,7 @@
 use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, Throughput};
-use jkem::{
-    Fo, MlKem512,
-    params::{
-        CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, SHARED_SECRET_BYTES,
-    },
-};
+use jkem::{MlKem512, MlKemInterface, params::*};
 use mlkem_bench::{bytes32, bytes64, mlkem_naive};
 use std::hint::black_box;
 
@@ -28,8 +23,8 @@ fn kem(c: &mut Criterion) {
     let native_keypair_coins = bytes64(3, 4);
     let native_encaps_coins = bytes32(5);
 
-    let (jkem_ek, jkem_dk) = unsafe { MlKem512::keygen_with_seed(&seed, &z).unwrap() };
-    let (jkem_ct, jkem_ss) = unsafe { MlKem512::encaps_with_message(&jkem_ek, &message).unwrap() };
+    let (jkem_ek, jkem_dk) = unsafe { MlKem512::keygen_internal(&seed, &z).unwrap() };
+    let (jkem_ct, jkem_ss) = unsafe { MlKem512::encaps_internal(&jkem_ek, &message).unwrap() };
     assert_eq!(jkem_ss, MlKem512::decaps(&jkem_dk, &jkem_ct).unwrap());
 
     let (native_ek, native_dk) = mlkem_naive::keypair_derand(&native_keypair_coins);
@@ -46,7 +41,7 @@ fn kem(c: &mut Criterion) {
         b.iter(|| mlkem_naive::keypair_derand(black_box(&native_keypair_coins)))
     });
     group.bench_function("jkem", |b| {
-        b.iter(|| unsafe { MlKem512::keygen_with_seed(black_box(&seed), black_box(&z)).unwrap() })
+        b.iter(|| unsafe { MlKem512::keygen_internal(black_box(&seed), black_box(&z)).unwrap() })
     });
     group.finish();
 
@@ -57,7 +52,7 @@ fn kem(c: &mut Criterion) {
     });
     group.bench_function("jkem", |b| {
         b.iter(|| unsafe {
-            MlKem512::encaps_with_message(black_box(&jkem_ek), black_box(&message)).unwrap()
+            MlKem512::encaps_internal(black_box(&jkem_ek), black_box(&message)).unwrap()
         })
     });
     group.finish();

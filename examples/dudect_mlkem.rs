@@ -3,10 +3,8 @@ use dudect_bencher::{
     BenchRng, Class, CtRunner,
     ctbench::{BenchMetadata, BenchName, BenchOpts, run_benches_console},
 };
-use jkem::params::{
-    CIPHERTEXT_BYTES, DECAPSULATION_KEY_BYTES, ENCAPSULATION_KEY_BYTES, SHARED_SECRET_BYTES,
-};
-use jkem::{Fo, MlKem512};
+use jkem::params::*;
+use jkem::{MlKem512, MlKemInterface};
 use std::{hint::black_box, path::PathBuf, time::Instant};
 
 const SAMPLES: usize = 100_000;
@@ -43,13 +41,12 @@ fn deterministic_z(case: usize) -> [u8; 32] {
 fn fixed_keys() -> (Ek, Dk) {
     let seed = [0x42u8; 32];
     let z = [0xa5u8; 32];
-    unsafe { MlKem512::keygen_with_seed(&seed, &z) }.expect("fixed keygen must succeed")
+    unsafe { MlKem512::keygen_internal(&seed, &z) }.expect("fixed keygen must succeed")
 }
 
 fn fixed_encapsulation(ek: &Ek) -> (Ct, Ss) {
     let message = [0x7bu8; 32];
-    unsafe { MlKem512::encaps_with_message(ek, &message) }
-        .expect("fixed encapsulation must succeed")
+    unsafe { MlKem512::encaps_internal(ek, &message) }.expect("fixed encapsulation must succeed")
 }
 
 // Current public API cannot vary the secret noise seed while holding `rho`
@@ -131,7 +128,7 @@ fn keygen_z_case_t(
 
 fn time_keygen(seed: [u8; 32], z: [u8; 32]) -> u64 {
     let start = Instant::now();
-    let (ek, dk) = unsafe { MlKem512::keygen_with_seed(&seed, &z) }.expect("keygen must succeed");
+    let (ek, dk) = unsafe { MlKem512::keygen_internal(&seed, &z) }.expect("keygen must succeed");
     black_box((ek[0], dk[0]));
     let elapsed = start.elapsed();
     elapsed.as_secs() * 1_000_000_000 + u64::from(elapsed.subsec_nanos())
@@ -164,7 +161,7 @@ fn dudect_encaps(runner: &mut CtRunner, rng: &mut BenchRng) {
 
     for (class, message) in classes.into_iter().zip(inputs) {
         runner.run_one(class, || {
-            let (ct, ss) = unsafe { MlKem512::encaps_with_message(&ek, &message) }
+            let (ct, ss) = unsafe { MlKem512::encaps_internal(&ek, &message) }
                 .expect("encapsulation must succeed");
             (ct[0], ss[0])
         });
@@ -227,7 +224,7 @@ fn main() {
 
     let run_keygen_scan = filter
         .as_deref()
-        .map_or(true, |value| "keygen_z_scan".contains(value));
+        .is_none_or(|value| "keygen_z_scan".contains(value));
     if run_keygen_scan && !continuous {
         run_keygen_z_scan();
     }

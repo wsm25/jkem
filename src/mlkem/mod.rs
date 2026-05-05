@@ -1,6 +1,7 @@
+pub mod control;
+pub mod internal;
+pub mod kpke;
 pub mod params;
-
-mod pke512;
 mod serialize;
 
-pub use pke512::{MlKem512, MlKemFoTransform};
+pub struct MlKem512;
