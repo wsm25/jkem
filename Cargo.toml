@@ -3,6 +3,9 @@ name = "jkem"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["benchmark"]
+
 [dependencies]
 getrandom = { version = "0.3", features = ["std"] }
 sha3 = "0.10"
