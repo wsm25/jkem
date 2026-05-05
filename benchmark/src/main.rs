@@ -1,12 +1,32 @@
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, Throughput};
-use jkem::{
-    MlKem512,
-    params::{MlKem512 as MlKem512Params, MlKemParams, SharedSecret},
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
+use hybrid_array::{
+    sizes::{U1920, U1952, U3936},
+    typenum::{U2, U5, U11},
 };
-use mlkem_bench::{bytes32, bytes64, mlkem_native};
+use jkem::{
+    MlKem,
+    params::{MlKem512, MlKem768, MlKem1024, MlKemParams, SharedSecret},
+};
+use mlkem_bench::{
+    bytes32, bytes64,
+    mlkem_native::{self, NativeKemParams},
+};
 use std::hint::black_box;
+
+struct MlKem1280;
+impl MlKemParams for MlKem1280 {
+    type K = U5;
+    type Eta1 = U2;
+    type Eta2 = U2;
+    type Du = U11;
+    type Dv = U5;
+    type PolyVectorBytes = U1920;
+    type EncapsulationKeyBytes = U1952;
+    type DecapsulationKeyBytes = U3936;
+    type CiphertextBytes = U1920;
+}
 
 fn main() {
     let mut criterion = Criterion::default()
@@ -20,59 +40,102 @@ fn main() {
 }
 
 fn kem(c: &mut Criterion) {
-    let native_keypair_coins = bytes64(3, 4);
-    let native_encaps_coins = bytes32(5);
+    bench_native::<MlKem512>(c, "mlkem-512");
+    bench_jkem::<MlKem512>(c, "mlkem-512");
+    bench_native::<MlKem768>(c, "mlkem-768");
+    bench_jkem::<MlKem768>(c, "mlkem-768");
+    bench_native::<MlKem1024>(c, "mlkem-1024");
+    bench_jkem::<MlKem1024>(c, "mlkem-1024");
+    bench_jkem::<MlKem1280>(c, "mlkem-1280-exp");
+}
 
-    let (jkem_ek, jkem_dk) = MlKem512::keygen().unwrap();
-    let (jkem_ct, jkem_ss) = MlKem512::encaps(&jkem_ek).unwrap();
-    assert_eq!(jkem_ss, MlKem512::decaps(&jkem_dk, &jkem_ct).unwrap());
-
-    let (native_ek, native_dk) = mlkem_native::keypair_derand(&native_keypair_coins);
-    let (native_ct, native_ss) = mlkem_native::enc_derand(&native_ek, &native_encaps_coins);
-    assert_eq!(native_ss, mlkem_native::dec(&native_ct, &native_dk));
-
-    let keygen_bytes = (MlKem512Params::encapsulation_key_bytes()
-        + MlKem512Params::decapsulation_key_bytes()) as u64;
-    let encaps_bytes = (MlKem512Params::encapsulation_key_bytes()
-        + MlKem512Params::ciphertext_bytes()
-        + size_of::<SharedSecret>()) as u64;
-    let decaps_bytes = (MlKem512Params::decapsulation_key_bytes()
-        + MlKem512Params::ciphertext_bytes()
-        + size_of::<SharedSecret>()) as u64;
+fn bench_jkem<P>(c: &mut Criterion, label: &'static str)
+where
+    P: MlKemParams,
+{
+    let (ek, dk) = MlKem::<P>::keygen().unwrap();
+    let (ct, ss) = MlKem::<P>::encaps(&ek).unwrap();
+    assert_eq!(ss, MlKem::<P>::decaps(&dk, &ct).unwrap());
 
     let mut group = c.benchmark_group("keygen");
-    group.throughput(Throughput::BytesDecimal(keygen_bytes));
-    group.bench_function("mlkem-native", |b| {
-        b.iter(|| mlkem_native::keypair_derand(black_box(&native_keypair_coins)))
+    group.throughput(Throughput::BytesDecimal(keygen_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("jkem", label), |b| {
+        b.iter(|| MlKem::<P>::keygen().unwrap())
     });
-    group.bench_function("jkem", |b| b.iter(|| MlKem512::keygen().unwrap()));
     group.finish();
 
     let mut group = c.benchmark_group("encaps");
-    group.throughput(Throughput::BytesDecimal(encaps_bytes));
-    group.bench_function("mlkem-native", |b| {
-        b.iter(|| mlkem_native::enc_derand(black_box(&native_ek), black_box(&native_encaps_coins)))
-    });
-    group.bench_function("jkem", |b| {
-        b.iter(|| MlKem512::encaps(black_box(&jkem_ek)).unwrap())
+    group.throughput(Throughput::BytesDecimal(encaps_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("jkem", label), |b| {
+        b.iter(|| MlKem::<P>::encaps(black_box(&ek)).unwrap())
     });
     group.finish();
 
     let mut group = c.benchmark_group("decaps");
-    group.throughput(Throughput::BytesDecimal(decaps_bytes));
-    group.bench_function("mlkem-native", |b| {
+    group.throughput(Throughput::BytesDecimal(decaps_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("jkem", label), |b| {
         b.iter_batched(
-            || (native_dk, native_ct),
-            |(dk, ct)| mlkem_native::dec(black_box(&ct), black_box(&dk)),
-            BatchSize::SmallInput,
-        )
-    });
-    group.bench_function("jkem", |b| {
-        b.iter_batched(
-            || (jkem_dk, jkem_ct),
-            |(dk, ct)| MlKem512::decaps(black_box(&dk), black_box(&ct)).unwrap(),
+            || (dk.clone(), ct.clone()),
+            |(dk, ct)| MlKem::<P>::decaps(black_box(&dk), black_box(&ct)).unwrap(),
             BatchSize::SmallInput,
         )
     });
     group.finish();
+}
+
+fn bench_native<P>(c: &mut Criterion, label: &'static str)
+where
+    P: NativeKemParams,
+{
+    let keypair_coins = bytes64(3, 4);
+    let encaps_coins = bytes32(5);
+    let (ek, dk) = mlkem_native::keypair_derand::<P>(&keypair_coins);
+    let (ct, ss) = mlkem_native::enc_derand::<P>(&ek, &encaps_coins);
+    assert_eq!(ss, mlkem_native::dec::<P>(&ct, &dk));
+
+    let mut group = c.benchmark_group("keygen");
+    group.throughput(Throughput::BytesDecimal(keygen_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("mlkem-native", label), |b| {
+        b.iter(|| mlkem_native::keypair_derand::<P>(black_box(&keypair_coins)))
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("encaps");
+    group.throughput(Throughput::BytesDecimal(encaps_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("mlkem-native", label), |b| {
+        b.iter(|| mlkem_native::enc_derand::<P>(black_box(&ek), black_box(&encaps_coins)))
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("decaps");
+    group.throughput(Throughput::BytesDecimal(decaps_bytes::<P>()));
+    group.bench_function(BenchmarkId::new("mlkem-native", label), |b| {
+        b.iter_batched(
+            || (dk.clone(), ct.clone()),
+            |(dk, ct)| mlkem_native::dec::<P>(black_box(&ct), black_box(&dk)),
+            BatchSize::SmallInput,
+        )
+    });
+    group.finish();
+}
+
+fn keygen_bytes<P>() -> u64
+where
+    P: MlKemParams,
+{
+    (P::encapsulation_key_bytes() + P::decapsulation_key_bytes()) as u64
+}
+
+fn encaps_bytes<P>() -> u64
+where
+    P: MlKemParams,
+{
+    (P::encapsulation_key_bytes() + P::ciphertext_bytes() + size_of::<SharedSecret>()) as u64
+}
+
+fn decaps_bytes<P>() -> u64
+where
+    P: MlKemParams,
+{
+    (P::decapsulation_key_bytes() + P::ciphertext_bytes() + size_of::<SharedSecret>()) as u64
 }

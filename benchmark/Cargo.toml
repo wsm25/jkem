@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 criterion = "0.7"
+hybrid-array = { version = "0.4.11", features = ["extra-sizes"] }
 jkem = { path = ".." }
 
 [build-dependencies]
