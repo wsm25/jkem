@@ -24,7 +24,7 @@ use core::marker::PhantomData;
 use zeroize::Zeroize;
 
 /// Algebraic K-PKE core used underneath ML-KEM.
-pub struct KpkeCore<P>(PhantomData<P>);
+pub(crate) struct KpkeCore<P>(PhantomData<P>);
 
 impl<P> KpkeCore<P>
 where

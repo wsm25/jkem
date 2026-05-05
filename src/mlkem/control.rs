@@ -15,15 +15,15 @@ use hybrid_array::{Array, SliceExt, typenum::Unsigned};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-pub struct MlKemControlPlane<P>(PhantomData<P>);
+pub(crate) struct MlKemControlPlane<P>(PhantomData<P>);
 
-pub struct KpkeKeygenSeeds {
+pub(crate) struct KpkeKeygenSeeds {
     rho: [u8; 32],
     sigma: WipeBytes<32>,
 }
 
 impl KpkeKeygenSeeds {
-    pub fn new(rho: [u8; 32], sigma: [u8; 32]) -> Self {
+    pub(crate) fn new(rho: [u8; 32], sigma: [u8; 32]) -> Self {
         Self {
             rho,
             sigma: WipeBytes::new(sigma),
@@ -39,28 +39,28 @@ impl KpkeKeygenSeeds {
     }
 }
 
-pub struct CheckedDecapsulationKeyParts<'a, P>
+pub(crate) struct CheckedDecapsulationKeyParts<'a, P>
 where
     P: MlKemParams,
 {
     /// K-PKE decryption key bytes embedded in the ML-KEM decapsulation key.
-    pub dk_pke: &'a PolyVectorBytes<P>,
+    pub(crate) dk_pke: &'a PolyVectorBytes<P>,
     /// Encapsulation key bytes embedded in the ML-KEM decapsulation key.
-    pub ek: &'a EncapsulationKey<P>,
+    pub(crate) ek: &'a EncapsulationKey<P>,
     /// Validated public-key hash stored in the ML-KEM decapsulation key.
-    pub h: &'a [u8; 32],
+    pub(crate) h: &'a [u8; 32],
     /// Secret implicit-rejection value.
-    pub z: &'a [u8; 32],
+    pub(crate) z: &'a [u8; 32],
 }
 
 /// ML-KEM success shared secret and deterministic K-PKE coins.
-pub struct MlKemDerivation {
+pub(crate) struct MlKemDerivation {
     pub(crate) shared_secret: WipeBytes<32>,
     pub(crate) coins: WipeBytes<32>,
 }
 
 impl MlKemDerivation {
-    pub fn new(shared_secret: SharedSecret, coins: [u8; 32]) -> Self {
+    pub(crate) fn new(shared_secret: SharedSecret, coins: [u8; 32]) -> Self {
         Self {
             shared_secret: WipeBytes::new(shared_secret),
             coins: WipeBytes::new(coins),

@@ -1,5 +1,5 @@
-pub mod control;
-pub mod kpke;
+pub(crate) mod control;
+pub(crate) mod kpke;
 pub mod params;
 mod serialize;
 

@@ -26,12 +26,12 @@ jobs:
       run: cargo check
       
     - name: Build Documentation
-      run: cargo doc --all --no-deps
+      run: cargo doc --no-deps
 
     - name: Deploy Docs
       uses: peaceiris/actions-gh-pages@v4
       with:
-        deploy_key: ${{ secrets.GITHUB_TOKEN }}
+        deploy_key: ${{ secrets.DEPLOY_KEY }}
         external_repository: wsm25/wsm25.github.io
         publish_branch: main
         publish_dir: target/doc
