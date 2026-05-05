@@ -19,8 +19,12 @@
 
 use thiserror::Error;
 
+/// Crate-local result type returned by fallible JKEM operations.
+///
+/// The error type is [`JkemError`].
 pub type Result<T> = core::result::Result<T, JkemError>;
 
+/// JKEM Errors.
 #[derive(Debug, PartialEq, Eq, Error)]
 pub enum JkemError {
     #[error("invalid {name} length: expected {expected} bytes, got {actual}")]

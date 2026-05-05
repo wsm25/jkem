@@ -57,8 +57,6 @@ pub trait KpkeCore {
     fn decrypt(dk_pke: &[u8; POLY_VECTOR_BYTES], ct: &[u8; CIPHERTEXT_BYTES]) -> Result<[u8; 32]>;
 }
 
-pub type MlKem512Ciphertext = [u8; CIPHERTEXT_BYTES];
-
 impl KpkeCore for MlKem512 {
     unsafe fn keygen_from_expanded(
         rho: &[u8; 32],

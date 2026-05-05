@@ -16,6 +16,8 @@ use crate::{
 };
 use subtle::{ConditionallySelectable, ConstantTimeEq};
 
+/// Public ML-KEM operations implemented by each supported parameter set, such
+/// as [`MlKem512`].
 pub trait MlKemInterface: KpkeCore {
     type Control: MlKemControlPlane;
 
@@ -54,6 +56,11 @@ pub trait MlKemInterface: KpkeCore {
         Ok((ct, ss))
     }
 
+    /// Generate a fresh ML-KEM encapsulation key and decapsulation key.
+    ///
+    /// The returned tuple is `(encapsulation_key, decapsulation_key)`, where
+    /// `encapsulation_key` is shared with senders and `decapsulation_key` must
+    /// remain secret.
     fn keygen() -> Result<([u8; ENCAPSULATION_KEY_BYTES], [u8; DECAPSULATION_KEY_BYTES])> {
         let mut d = WipeBytes::<32>::zeroed();
         let mut z = WipeBytes::<32>::zeroed();
@@ -63,6 +70,11 @@ pub trait MlKemInterface: KpkeCore {
         unsafe { Self::keygen_internal(&d, &z) }
     }
 
+    /// Encapsulate to an ML-KEM encapsulation key.
+    ///
+    /// Returns `(cipher_text, shared_secret)`, where `cipher_text` is sent to
+    /// the decapsulating party and `shared_secret` is the sender's shared
+    /// secret.
     fn encaps(
         ek: &[u8; ENCAPSULATION_KEY_BYTES],
     ) -> Result<([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES])> {
@@ -72,6 +84,10 @@ pub trait MlKemInterface: KpkeCore {
         unsafe { Self::encaps_internal(ek, &message) }
     }
 
+    /// Decapsulate an ML-KEM ciphertext with a decapsulation key.
+    ///
+    /// Returns the receiver's shared secret. Modified or invalid ciphertexts
+    /// are handled with ML-KEM implicit rejection.
     fn decaps(
         dk: &[u8; DECAPSULATION_KEY_BYTES],
         ct: &[u8; CIPHERTEXT_BYTES],

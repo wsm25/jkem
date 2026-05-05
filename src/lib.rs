@@ -18,19 +18,24 @@
 //! caller-owned copies are plain byte arrays/newtypes. Callers are responsible for
 //! wiping them when no longer needed.
 //!
-//! ```
-//! use jkem::{MlKem512, MlKemInternal};
+//! The main public entry point is [`MlKem512`]. Import [`MlKemInterface`] to use
+//! its key generation, encapsulation, and decapsulation methods.
 //!
-//! let (ek, dk) = MlKem512::keygen()?;
-//! let (ct, ss) = MlKem512::encaps(&ek)?;
-//! assert_eq!(MlKem512::decaps(&dk, &ct)?, ss);
+//! ```
+//! use jkem::{MlKem512, MlKemInterface};
+//!
+//! let (encapsulation_key, decapsulation_key) = MlKem512::keygen()?;
+//! let (cipher_text, sender_shared_secret) = MlKem512::encaps(&encapsulation_key)?;
+//! let receiver_shared_secret = MlKem512::decaps(&decapsulation_key, &cipher_text)?;
+//!
+//! assert_eq!(receiver_shared_secret, sender_shared_secret);
 //!
 //! # Ok::<(), jkem::JkemError>(())
 //! ```
 
-pub mod error;
+mod error;
 mod math;
-pub mod mlkem;
+mod mlkem;
 mod security;
 
 pub use error::{JkemError, Result};
