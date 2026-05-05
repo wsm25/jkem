@@ -1,6 +1,7 @@
 //! Arithmetic in `R_q = Z_q[X] / (X^256 + 1)`.
 
-use crate::params::{K, N, Q};
+use crate::params::{MlKemParams, N, Q};
+use hybrid_array::Array;
 
 #[derive(Clone)]
 pub(crate) struct Poly {
@@ -27,8 +28,8 @@ impl Poly {
     }
 }
 
-pub(crate) type PolyVector = [Poly; K];
-pub(crate) type PolyMatrix = [[Poly; K]; K];
+pub(crate) type PolyVector<P> = Array<Poly, <P as MlKemParams>::K>;
+pub(crate) type PolyMatrix<P> = Array<PolyVector<P>, <P as MlKemParams>::K>;
 
 pub(crate) fn reduce(x: i16) -> i16 {
     let q = i32::from(Q);
@@ -92,8 +93,11 @@ pub(crate) fn mul_naive(a: &Poly, b: &Poly) -> Poly {
     Poly::new(out)
 }
 
-pub(crate) fn add_vector(a: &PolyVector, b: &PolyVector) -> PolyVector {
-    core::array::from_fn(|i| add(&a[i], &b[i]))
+pub(crate) fn add_vector<P>(a: &PolyVector<P>, b: &PolyVector<P>) -> PolyVector<P>
+where
+    P: MlKemParams,
+{
+    Array::from_fn(|i| add(&a[i], &b[i]))
 }
 
 #[cfg(test)]
@@ -102,9 +106,9 @@ mod tests {
 
     #[test]
     fn reduce_maps_coefficients_into_field_range() {
-        assert_eq!(reduce(-1), Q - 1);
-        assert_eq!(reduce(Q), 0);
-        assert_eq!(reduce(Q + 7), 7);
+        assert_eq!(reduce(-1), Q as i16 - 1);
+        assert_eq!(reduce(Q as i16), 0);
+        assert_eq!(reduce(Q as i16 + 7), 7);
         assert_eq!(reduce(i16::MIN), 522);
         assert_eq!(reduce(i16::MAX), 2806);
     }
@@ -118,7 +122,7 @@ mod tests {
 
         let product = mul_naive(&Poly::new(lhs), &Poly::new(rhs));
 
-        assert_eq!(product.coeffs()[0], Q - 1);
+        assert_eq!(product.coeffs()[0], Q as i16 - 1);
         assert!(product.coeffs()[1..].iter().all(|&coeff| coeff == 0));
     }
 }

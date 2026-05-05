@@ -3,14 +3,17 @@
 use crate::{
     error::{JkemError, Result},
     math::ring::{Poly, PolyMatrix},
-    params::{N, Q},
+    params::{MlKemParams, N, Q},
     security::crypto,
 };
 
-pub(crate) fn sample_matrix(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix> {
+pub(crate) fn sample_matrix<P>(rho: &[u8; 32], transpose: bool) -> Result<PolyMatrix<P>>
+where
+    P: MlKemParams,
+{
     // Public algorithm branch: A vs A^T.
-    Ok(core::array::from_fn(|i| {
-        core::array::from_fn(|j| {
+    Ok(hybrid_array::Array::from_fn(|i| {
+        hybrid_array::Array::from_fn(|j| {
             if transpose {
                 sample_uniform(rho, i as u8, j as u8)
             } else {
@@ -33,10 +36,7 @@ pub(crate) fn sample_noise(_seed: &[u8; 32], _nonce: u8, _eta: usize) -> Result<
 }
 
 fn noise_bytes<const LEN: usize>(seed: &[u8; 32], nonce: u8) -> [u8; LEN] {
-    let mut input = [0u8; 33];
-    input[..32].copy_from_slice(seed);
-    input[32] = nonce;
-    crypto::shake256(&input)
+    crypto::shake256([seed, &[nonce][..]])
 }
 
 fn cbd<const ETA: usize>(bytes: &[u8]) -> Poly {
@@ -53,7 +53,7 @@ fn cbd<const ETA: usize>(bytes: &[u8]) -> Poly {
 
         let value = a - b;
         // Secret sign: mask instead of branch.
-        *coeff = value + ((value >> 15) & Q);
+        *coeff = value + ((value >> 15) & Q as i16);
     }
 
     Poly::new(coeffs)
@@ -85,14 +85,14 @@ fn sample_uniform(rho: &[u8; 32], x: u8, y: u8) -> Poly {
         for chunk in buf.chunks_exact(3) {
             let d1 = u16::from(chunk[0]) | ((u16::from(chunk[1]) & 0x0f) << 8);
             let d2 = (u16::from(chunk[1]) >> 4) | (u16::from(chunk[2]) << 4);
-            if d1 < Q as u16 {
+            if d1 < Q {
                 coeffs[filled] = d1 as i16;
                 filled += 1;
                 if filled == N {
                     break;
                 }
             }
-            if d2 < Q as u16 {
+            if d2 < Q {
                 coeffs[filled] = d2 as i16;
                 filled += 1;
                 if filled == N {
@@ -108,6 +108,7 @@ fn sample_uniform(rho: &[u8; 32], x: u8, y: u8) -> Poly {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params::MlKemParams;
 
     #[test]
     fn sample_noise_is_deterministic_for_same_seed_nonce_eta() {
@@ -153,12 +154,12 @@ mod tests {
     #[test]
     fn sample_matrix_is_deterministic_and_uses_transpose_flag() {
         let rho = [9u8; 32];
-        let matrix = sample_matrix(&rho, false).unwrap();
-        let again = sample_matrix(&rho, false).unwrap();
-        let transposed = sample_matrix(&rho, true).unwrap();
+        let matrix = sample_matrix::<crate::params::MlKem512>(&rho, false).unwrap();
+        let again = sample_matrix::<crate::params::MlKem512>(&rho, false).unwrap();
+        let transposed = sample_matrix::<crate::params::MlKem512>(&rho, true).unwrap();
 
-        for i in 0..crate::params::K {
-            for j in 0..crate::params::K {
+        for i in 0..crate::params::MlKem512::k() {
+            for j in 0..crate::params::MlKem512::k() {
                 assert_eq!(matrix[i][j].coeffs(), again[i][j].coeffs());
                 assert_eq!(matrix[i][j].coeffs(), transposed[j][i].coeffs());
             }
@@ -168,11 +169,11 @@ mod tests {
     #[test]
     fn sample_matrix_coefficients_are_mod_q() {
         let rho = [3u8; 32];
-        let matrix = sample_matrix(&rho, false).unwrap();
+        let matrix = sample_matrix::<crate::params::MlKem512>(&rho, false).unwrap();
         for row in matrix {
             for poly in row {
                 for &coeff in poly.coeffs() {
-                    assert!((0..Q).contains(&coeff));
+                    assert!((0..Q as i16).contains(&coeff));
                 }
             }
         }

@@ -34,5 +34,5 @@ jobs:
         deploy_key: ${{ secrets.PAGE_SSH_KEY }}
         external_repository: wsm25/wsm25.github.io
         publish_branch: main
-        publish_dir: toys-rs/target/doc
-        destination_dir: toys-rs
+        publish_dir: target/doc
+        destination_dir: jkem

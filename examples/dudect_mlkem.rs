@@ -3,18 +3,22 @@ use dudect_bencher::{
     BenchRng, Class, CtRunner,
     ctbench::{BenchMetadata, BenchName, BenchOpts, run_benches_console},
 };
-use jkem::params::*;
-use jkem::{MlKem512, MlKemInterface};
+use hybrid_array::typenum::Unsigned;
+use jkem::MlKem512;
+use jkem::params::{
+    Ciphertext, DecapsulationKey, EncapsulationKey, MlKem512 as MlKem512Params, MlKemParams,
+    SharedSecret,
+};
 use std::{hint::black_box, path::PathBuf, time::Instant};
 
 const SAMPLES: usize = 100_000;
 const KEYGEN_Z_CASES: usize = 1_024;
 const KEYGEN_Z_SAMPLES_PER_CASE: usize = 128;
 
-type Ek = [u8; ENCAPSULATION_KEY_BYTES];
-type Dk = [u8; DECAPSULATION_KEY_BYTES];
-type Ct = [u8; CIPHERTEXT_BYTES];
-type Ss = [u8; SHARED_SECRET_BYTES];
+type Ek = EncapsulationKey<MlKem512Params>;
+type Dk = DecapsulationKey<MlKem512Params>;
+type Ct = Ciphertext<MlKem512Params>;
+type Ss = SharedSecret;
 
 fn random_array<const N: usize>(rng: &mut BenchRng) -> [u8; N] {
     let mut out = [0u8; N];
@@ -145,21 +149,14 @@ fn welch_t(lhs: RunningStats, rhs: RunningStats) -> f64 {
 // classified as fixed versus random without measuring OS RNG behavior.
 fn dudect_encaps(runner: &mut CtRunner, rng: &mut BenchRng) {
     let (ek, _) = fixed_keys();
-    let mut inputs = Vec::with_capacity(SAMPLES);
-    let mut classes = Vec::with_capacity(SAMPLES);
     let fixed_message = [0x7bu8; 32];
 
     for _ in 0..SAMPLES {
-        if rng.r#gen::<bool>() {
-            inputs.push(fixed_message);
-            classes.push(Class::Left);
+        let (class, message) = if rng.r#gen::<bool>() {
+            (Class::Left, fixed_message)
         } else {
-            inputs.push(random_array::<32>(rng));
-            classes.push(Class::Right);
-        }
-    }
-
-    for (class, message) in classes.into_iter().zip(inputs) {
+            (Class::Right, random_array::<32>(rng))
+        };
         runner.run_one(class, || {
             let (ct, ss) = unsafe { MlKem512::encaps_internal(&ek, &message) }
                 .expect("encapsulation must succeed");
@@ -175,22 +172,15 @@ fn dudect_encaps(runner: &mut CtRunner, rng: &mut BenchRng) {
 fn dudect_decaps(runner: &mut CtRunner, rng: &mut BenchRng) {
     let (ek, dk) = fixed_keys();
     let (valid_ct, _) = fixed_encapsulation(&ek);
-    let mut inputs = Vec::with_capacity(SAMPLES);
-    let mut classes = Vec::with_capacity(SAMPLES);
 
     for i in 0..SAMPLES {
-        if rng.r#gen::<bool>() {
-            inputs.push(valid_ct);
-            classes.push(Class::Left);
+        let (class, ct) = if rng.r#gen::<bool>() {
+            (Class::Left, valid_ct)
         } else {
             let mut modified = valid_ct;
-            modified[i % CIPHERTEXT_BYTES] ^= 1;
-            inputs.push(modified);
-            classes.push(Class::Right);
-        }
-    }
-
-    for (class, ct) in classes.into_iter().zip(inputs) {
+            modified[i % <MlKem512Params as MlKemParams>::CiphertextBytes::USIZE] ^= 1;
+            (Class::Right, modified)
+        };
         runner.run_one(class, || {
             let ss = MlKem512::decaps(&dk, &ct).expect("decapsulation must succeed");
             ss[0]
@@ -229,7 +219,7 @@ fn main() {
         run_keygen_z_scan();
     }
 
-    let benches = vec![
+    let benches = [
         BenchMetadata {
             name: BenchName("dudect_encaps"),
             seed: None,
@@ -253,7 +243,7 @@ fn main() {
             filter: bench_filter,
             file_out: out,
         },
-        benches,
+        benches.into(),
     )
     .unwrap();
 }

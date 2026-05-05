@@ -1,4 +1,4 @@
-//! ML-KEM-512 control-plane contract and implementation.
+//! ML-KEM control-plane implementation.
 //!
 //! This module contains the ML-KEM-specific pieces from FIPS 203 that sit above
 //! the algebraic K-PKE core: key-generation seed expansion, decapsulation-key
@@ -10,10 +10,12 @@ use crate::{
     params::*,
     security::{crypto, wipe::WipeBytes},
 };
+use core::marker::PhantomData;
+use hybrid_array::{Array, SliceExt, typenum::Unsigned};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
-pub struct MlKem512ControlPlane;
+pub struct MlKemControlPlane<P>(PhantomData<P>);
 
 pub struct KpkeKeygenSeeds {
     rho: [u8; 32],
@@ -37,11 +39,14 @@ impl KpkeKeygenSeeds {
     }
 }
 
-pub struct CheckedDecapsulationKeyParts<'a> {
+pub struct CheckedDecapsulationKeyParts<'a, P>
+where
+    P: MlKemParams,
+{
     /// K-PKE decryption key bytes embedded in the ML-KEM decapsulation key.
-    pub dk_pke: &'a [u8; POLY_VECTOR_BYTES],
+    pub dk_pke: &'a PolyVectorBytes<P>,
     /// Encapsulation key bytes embedded in the ML-KEM decapsulation key.
-    pub ek: &'a [u8; ENCAPSULATION_KEY_BYTES],
+    pub ek: &'a EncapsulationKey<P>,
     /// Validated public-key hash stored in the ML-KEM decapsulation key.
     pub h: &'a [u8; 32],
     /// Secret implicit-rejection value.
@@ -50,12 +55,12 @@ pub struct CheckedDecapsulationKeyParts<'a> {
 
 /// ML-KEM success shared secret and deterministic K-PKE coins.
 pub struct MlKemDerivation {
-    pub(crate) shared_secret: WipeBytes<SHARED_SECRET_BYTES>,
+    pub(crate) shared_secret: WipeBytes<32>,
     pub(crate) coins: WipeBytes<32>,
 }
 
 impl MlKemDerivation {
-    pub fn new(shared_secret: [u8; SHARED_SECRET_BYTES], coins: [u8; 32]) -> Self {
+    pub fn new(shared_secret: SharedSecret, coins: [u8; 32]) -> Self {
         Self {
             shared_secret: WipeBytes::new(shared_secret),
             coins: WipeBytes::new(coins),
@@ -63,44 +68,16 @@ impl MlKemDerivation {
     }
 }
 
-pub trait MlKemControlPlane {
+impl<P> MlKemControlPlane<P>
+where
+    P: MlKemParams,
+{
     /// Expand FIPS 203 ML-KEM key generation seed `d` into K-PKE seeds.
-    fn expand_keygen_seed(d: &[u8; 32]) -> Result<KpkeKeygenSeeds>;
-
-    /// Assemble `dk = dkPKE || ek || H(ek) || z`.
-    fn pack_decapsulation_key(
-        dk_pke: &[u8; POLY_VECTOR_BYTES],
-        ek: &[u8; ENCAPSULATION_KEY_BYTES],
-        z: &[u8; 32],
-    ) -> Result<[u8; DECAPSULATION_KEY_BYTES]>;
-
-    /// Parse and validate an ML-KEM decapsulation key.
-    fn unpack_decapsulation_key(
-        dk: &[u8; DECAPSULATION_KEY_BYTES],
-    ) -> Result<CheckedDecapsulationKeyParts<'_>>;
-
-    /// Derive `(K, r) = G(m || H(ek))` for encapsulation.
-    fn derive_encapsulation(
-        ek: &[u8; ENCAPSULATION_KEY_BYTES],
-        message: &[u8; 32],
-    ) -> Result<MlKemDerivation>;
-
-    /// Mirror encapsulation derivation using the validated stored `H(ek)`.
-    fn derive_decapsulation(h: &[u8; 32], message: &[u8; 32]) -> Result<MlKemDerivation>;
-
-    /// Derive implicit rejection secret `J(z || c)`.
-    fn derive_implicit_rejection(
-        z: &[u8; 32],
-        ct: &[u8; CIPHERTEXT_BYTES],
-    ) -> Result<[u8; SHARED_SECRET_BYTES]>;
-}
-
-impl MlKemControlPlane for MlKem512ControlPlane {
-    fn expand_keygen_seed(d: &[u8; 32]) -> Result<KpkeKeygenSeeds> {
+    pub(crate) fn expand_keygen_seed(d: &[u8; 32]) -> Result<KpkeKeygenSeeds> {
         // FIPS 203 ML-KEM expands d with the parameter k before K-PKE sampling.
         let mut seed_input = WipeBytes::<33>::zeroed();
         seed_input[..32].copy_from_slice(d);
-        seed_input[32] = K as u8;
+        seed_input[32] = P::k() as u8;
         let mut expanded = crypto::sha3_512(&seed_input[..]);
         let mut rho = [0u8; 32];
         let mut sigma = [0u8; 32];
@@ -110,34 +87,38 @@ impl MlKemControlPlane for MlKem512ControlPlane {
         Ok(KpkeKeygenSeeds::new(rho, sigma))
     }
 
-    fn pack_decapsulation_key(
-        dk_pke: &[u8; POLY_VECTOR_BYTES],
-        ek: &[u8; ENCAPSULATION_KEY_BYTES],
+    /// Assemble `dk = dkPKE || ek || H(ek) || z`.
+    pub(crate) fn pack_decapsulation_key(
+        dk_pke: &PolyVectorBytes<P>,
+        ek: &EncapsulationKey<P>,
         z: &[u8; 32],
-    ) -> Result<[u8; DECAPSULATION_KEY_BYTES]> {
+    ) -> Result<DecapsulationKey<P>> {
         let h = crypto::sha3_256(ek);
-        let mut dk = [0u8; DECAPSULATION_KEY_BYTES];
-        dk[..POLY_VECTOR_BYTES].copy_from_slice(dk_pke);
-        dk[POLY_VECTOR_BYTES..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES].copy_from_slice(ek);
-        dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES
-            ..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32]
-            .copy_from_slice(&h);
-        dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32..].copy_from_slice(z);
+        let mut dk = Array::default();
+        let sk_end = P::PolyVectorBytes::USIZE;
+        let ek_end = sk_end + P::EncapsulationKeyBytes::USIZE;
+        let h_end = ek_end + 32;
+        dk[..sk_end].copy_from_slice(dk_pke);
+        dk[sk_end..ek_end].copy_from_slice(ek);
+        dk[ek_end..h_end].copy_from_slice(&h);
+        dk[h_end..].copy_from_slice(z);
         Ok(dk)
     }
 
-    fn unpack_decapsulation_key(
-        dk: &[u8; DECAPSULATION_KEY_BYTES],
-    ) -> Result<CheckedDecapsulationKeyParts<'_>> {
-        let dk_pke: &[u8; POLY_VECTOR_BYTES] = (&dk[..POLY_VECTOR_BYTES])
-            .try_into()
+    /// Parse and validate an ML-KEM decapsulation key.
+    pub(crate) fn unpack_decapsulation_key(
+        dk: &DecapsulationKey<P>,
+    ) -> Result<CheckedDecapsulationKeyParts<'_, P>> {
+        let sk_end = P::PolyVectorBytes::USIZE;
+        let ek_end = sk_end + P::EncapsulationKeyBytes::USIZE;
+        let h_end = ek_end + 32;
+        let dk_pke = dk[..sk_end]
+            .as_hybrid_array()
             .expect("fixed-layout decapsulation key contains a PKE secret key");
-        let ek: &[u8; ENCAPSULATION_KEY_BYTES] = (&dk
-            [POLY_VECTOR_BYTES..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES])
-            .try_into()
+        let ek = dk[sk_end..ek_end]
+            .as_hybrid_array()
             .expect("fixed-layout decapsulation key contains an encapsulation key");
-        let h: &[u8; 32] = (&dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES
-            ..POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32])
+        let h: &[u8; 32] = (&dk[ek_end..h_end])
             .try_into()
             .expect("fixed-layout decapsulation key contains H(ek)");
         if crypto::sha3_256(ek).ct_ne(h).into() {
@@ -146,32 +127,36 @@ impl MlKemControlPlane for MlKem512ControlPlane {
                 message: "stored H(ek) does not match ek",
             });
         }
-        let z: &[u8; 32] = (&dk[POLY_VECTOR_BYTES + ENCAPSULATION_KEY_BYTES + 32..])
+        let z: &[u8; 32] = (&dk[h_end..])
             .try_into()
             .expect("fixed-layout decapsulation key contains z");
 
         Ok(CheckedDecapsulationKeyParts { dk_pke, ek, h, z })
     }
 
-    fn derive_encapsulation(
-        ek: &[u8; ENCAPSULATION_KEY_BYTES],
+    /// Derive `(K, r) = G(m || H(ek))` for encapsulation.
+    pub(crate) fn derive_encapsulation(
+        ek: &EncapsulationKey<P>,
         message: &[u8; 32],
     ) -> Result<MlKemDerivation> {
         let h = crypto::sha3_256(ek);
         derive_ml_kem_success(&h, message)
     }
 
-    fn derive_decapsulation(h: &[u8; 32], message: &[u8; 32]) -> Result<MlKemDerivation> {
+    /// Mirror encapsulation derivation using the validated stored `H(ek)`.
+    pub(crate) fn derive_decapsulation(
+        h: &[u8; 32],
+        message: &[u8; 32],
+    ) -> Result<MlKemDerivation> {
         derive_ml_kem_success(h, message)
     }
 
-    fn derive_implicit_rejection(
+    /// Derive implicit rejection secret `J(z || c)`.
+    pub(crate) fn derive_implicit_rejection(
         z: &[u8; 32],
-        ct: &[u8; CIPHERTEXT_BYTES],
-    ) -> Result<[u8; SHARED_SECRET_BYTES]> {
-        let mut input = WipeBytes::<{ 32 + CIPHERTEXT_BYTES }>::zeroed();
-        input[..32].copy_from_slice(z);
-        input[32..].copy_from_slice(ct);
-        Ok(crypto::shake256(&input[..]))
+        ct: &Ciphertext<P>,
+    ) -> Result<SharedSecret>
+    {
+        Ok(crypto::shake256([&z[..], &ct[..]]))
     }
 }

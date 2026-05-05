@@ -1,4 +1,6 @@
-use jkem::params::*;
+use jkem::{
+    params::{Ciphertext, DecapsulationKey, EncapsulationKey, MlKem512, SharedSecret},
+};
 
 const KEYPAIR_COIN_BYTES: usize = 64;
 const ENCAPS_COIN_BYTES: usize = 32;
@@ -16,9 +18,9 @@ unsafe extern "C" {
 
 pub fn keypair_derand(
     coins: &[u8; KEYPAIR_COIN_BYTES],
-) -> ([u8; ENCAPSULATION_KEY_BYTES], [u8; DECAPSULATION_KEY_BYTES]) {
-    let mut pk = [0u8; ENCAPSULATION_KEY_BYTES];
-    let mut sk = [0u8; DECAPSULATION_KEY_BYTES];
+) -> (EncapsulationKey<MlKem512>, DecapsulationKey<MlKem512>) {
+    let mut pk = EncapsulationKey::<MlKem512>::default();
+    let mut sk = DecapsulationKey::<MlKem512>::default();
     let rc = unsafe {
         bench_mlkem_native_keypair_derand(pk.as_mut_ptr(), sk.as_mut_ptr(), coins.as_ptr())
     };
@@ -27,11 +29,11 @@ pub fn keypair_derand(
 }
 
 pub fn enc_derand(
-    pk: &[u8; ENCAPSULATION_KEY_BYTES],
+    pk: &EncapsulationKey<MlKem512>,
     coins: &[u8; ENCAPS_COIN_BYTES],
-) -> ([u8; CIPHERTEXT_BYTES], [u8; SHARED_SECRET_BYTES]) {
-    let mut ct = [0u8; CIPHERTEXT_BYTES];
-    let mut ss = [0u8; SHARED_SECRET_BYTES];
+) -> (Ciphertext<MlKem512>, SharedSecret) {
+    let mut ct = Ciphertext::<MlKem512>::default();
+    let mut ss = [0u8; 32];
     let rc = unsafe {
         bench_mlkem_native_enc_derand(
             ct.as_mut_ptr(),
@@ -44,11 +46,8 @@ pub fn enc_derand(
     (ct, ss)
 }
 
-pub fn dec(
-    ct: &[u8; CIPHERTEXT_BYTES],
-    sk: &[u8; DECAPSULATION_KEY_BYTES],
-) -> [u8; SHARED_SECRET_BYTES] {
-    let mut ss = [0u8; SHARED_SECRET_BYTES];
+pub fn dec(ct: &Ciphertext<MlKem512>, sk: &DecapsulationKey<MlKem512>) -> SharedSecret {
+    let mut ss = [0u8; 32];
     let rc = unsafe { bench_mlkem_native_dec(ss.as_mut_ptr(), ct.as_ptr(), sk.as_ptr()) };
     assert_eq!(rc, 0, "mlkem-native dec failed");
     ss

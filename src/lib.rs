@@ -1,7 +1,8 @@
-//! Teaching-oriented ML-KEM-512 implementation.
+//! Teaching-oriented ML-KEM implementation.
 //!
 //! This crate mirrors the standard construction: polynomial-ring arithmetic,
 //! SHA3/SHAKE sampling, K-PKE core arithmetic, then the ML-KEM control plane.
+//! It supports the ML-KEM-512, ML-KEM-768, and ML-KEM-1024 parameter sets.
 //!
 //! Security scope: this implementation is for learning and testing, not
 //! production deployment. It avoids the main secret-dependent branches in
@@ -18,17 +19,20 @@
 //! caller-owned copies are plain byte arrays/newtypes. Callers are responsible for
 //! wiping them when no longer needed.
 //!
-//! The main public entry point is [`MlKem512`]. Import [`MlKemInterface`] to use
-//! its key generation, encapsulation, and decapsulation methods.
+//! The main public entry point is [`MlKem<P>`], where `P` is one of the marker
+//! types in [`params`]. The convenience aliases [`MlKem512`], [`MlKem768`], and
+//! [`MlKem1024`] cover the standard parameter sets.
 //!
 //! ```
-//! use jkem::{MlKem512, MlKemInterface};
+//! use jkem::{MlKem512, params::EncapsulationKey};
 //!
 //! let (encapsulation_key, decapsulation_key) = MlKem512::keygen()?;
 //! let (cipher_text, sender_shared_secret) = MlKem512::encaps(&encapsulation_key)?;
 //! let receiver_shared_secret = MlKem512::decaps(&decapsulation_key, &cipher_text)?;
 //!
 //! assert_eq!(receiver_shared_secret, sender_shared_secret);
+//!
+//! let _: EncapsulationKey<jkem::params::MlKem512> = encapsulation_key;
 //!
 //! # Ok::<(), jkem::JkemError>(())
 //! ```
@@ -40,4 +44,4 @@ mod security;
 
 pub use error::{JkemError, Result};
 pub use mlkem::params;
-pub use mlkem::{MlKem512, internal::MlKemInterface};
+pub use mlkem::{MlKem, MlKem512, MlKem768, MlKem1024};

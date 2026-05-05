@@ -4,14 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["benchmark"]
+members = [ "benchmark" ]
 
 [dependencies]
-getrandom = { version = "0.3", features = ["std"] }
-sha3 = "0.10"
+getrandom = { version = "0.3", features = [ "std" ] }
+hybrid-array = { version = "0.4.11", features = ["extra-sizes"] }
+sha3 = "0.11"
 subtle = "2"
 thiserror = "2"
-zeroize = { version = "1", features = ["zeroize_derive"] }
+zeroize = { version = "1", features = [ "zeroize_derive" ] }
 
 [dev-dependencies]
 dudect-bencher = "0.6"

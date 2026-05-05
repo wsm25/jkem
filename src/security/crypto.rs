@@ -19,9 +19,11 @@ pub(crate) fn shake128_reader(input: &[u8]) -> impl XofReader {
     hasher.finalize_xof()
 }
 
-pub(crate) fn shake256<const N: usize>(input: &[u8]) -> [u8; N] {
+pub(crate) fn shake256<'a, const N: usize>(input: impl IntoIterator<Item = &'a [u8]>) -> [u8; N] {
     let mut hasher = Shake256::default();
-    hasher.update(input);
+    for i in input {
+        hasher.update(i);
+    }
     let mut reader = hasher.finalize_xof();
     let mut out = [0; N];
     reader.read(&mut out);

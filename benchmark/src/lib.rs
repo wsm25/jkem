@@ -1,4 +1,4 @@
-pub mod mlkem_naive;
+pub mod mlkem_native;
 
 pub fn bytes32(seed: u8) -> [u8; 32] {
     core::array::from_fn(|i| seed.wrapping_add((i as u8).wrapping_mul(17)))
