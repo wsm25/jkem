@@ -8,6 +8,7 @@ publish = false
 criterion = "0.7"
 hybrid-array = { version = "0.4.11", features = ["extra-sizes"] }
 jkem = { path = ".." }
+openssl = "0.10"
 
 [build-dependencies]
 cc = "1"

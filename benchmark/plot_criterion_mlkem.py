@@ -246,8 +246,8 @@ def plot(
     if not sizes:
         raise SystemExit(f"No benchmark results found under {criterion_dir}")
 
-    fig, axes = plt.subplots(1, 3, figsize=(13.5, 5.2))
-    fig.suptitle(title, fontsize=16, fontweight="semibold")
+    fig, axes = plt.subplots(1, 3, figsize=(14.2, 5.6))
+    fig.suptitle(title, fontsize=18, fontweight="semibold")
 
     width = 0.34
     x_positions = list(range(len(sizes)))
@@ -297,17 +297,18 @@ def plot(
                     textcoords="offset points",
                     ha="center",
                     va="bottom",
-                    fontsize=7,
+                    fontsize=8,
                     color="#374151",
                 )
 
             for size in missing:
                 add_missing_label(ax, x_positions[sizes.index(size)] + offset, "n/a")
 
-        ax.set_title(operation.capitalize(), fontsize=12, fontweight="semibold")
+        ax.set_title(operation.capitalize(), fontsize=14, fontweight="semibold")
         ax.set_xticks(x_positions, [str(size) for size in sizes])
-        ax.set_xlabel("ML-KEM parameter set")
-        ax.set_ylabel(f"Throughput ({unit})")
+        ax.set_xlabel("ML-KEM parameter set", fontsize=12)
+        ax.set_ylabel(f"Throughput ({unit})", fontsize=12)
+        ax.tick_params(axis="both", labelsize=11)
         ax.grid(axis="y", color="#e5e7eb", linewidth=0.8)
         ax.set_axisbelow(True)
         for spine in ("top", "right"):
@@ -328,9 +329,10 @@ def plot(
         loc="lower center",
         ncols=2,
         bbox_to_anchor=(0.5, 0.025),
+        fontsize=11,
         frameon=False,
     )
-    fig.subplots_adjust(left=0.07, right=0.99, top=0.84, bottom=0.2, wspace=0.28)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.84, bottom=0.22, wspace=0.3)
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output), dpi=200, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)

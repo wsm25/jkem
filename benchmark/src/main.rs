@@ -3,16 +3,17 @@ use std::time::Duration;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
 use hybrid_array::{
     sizes::{U1920, U1952, U3936},
-    typenum::{U2, U5, U11},
+    typenum::{U11, U2, U5},
 };
 use jkem::{
+    params::{MlKem1024, MlKem512, MlKem768, MlKemParams, N},
     MlKem,
-    params::{MlKem512, MlKem768, MlKem1024, MlKemParams, N},
 };
 use mlkem_bench::{
     bytes32, bytes64,
     mlkem_native::{self, NativeKemParams},
 };
+use openssl::{derive::Deriver, dh::Dh, pkey::PKey};
 use std::hint::black_box;
 
 struct MlKem1280;
@@ -36,6 +37,7 @@ fn main() {
         .configure_from_args();
 
     kem(&mut criterion);
+    key_exchange(&mut criterion);
     criterion.final_summary();
 }
 
@@ -117,6 +119,59 @@ where
         )
     });
     group.finish();
+}
+
+fn key_exchange(c: &mut Criterion) {
+    bench_x25519(c);
+    bench_modp2048_256(c);
+}
+
+fn bench_x25519(c: &mut Criterion) {
+    let alice = PKey::generate_x25519().unwrap();
+    let bob = PKey::generate_x25519().unwrap();
+    assert_eq!(x25519_derive(&alice, &bob), x25519_derive(&bob, &alice));
+
+    let mut group = c.benchmark_group("kx-keygen");
+    group.bench_function(BenchmarkId::new("openssl", "x25519"), |b| {
+        b.iter(|| PKey::generate_x25519().unwrap())
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("kx-derive");
+    group.bench_function(BenchmarkId::new("openssl", "x25519"), |b| {
+        b.iter(|| x25519_derive(black_box(&alice), black_box(&bob)))
+    });
+    group.finish();
+}
+
+fn bench_modp2048_256(c: &mut Criterion) {
+    let alice = Dh::get_2048_256().unwrap().generate_key().unwrap();
+    let bob = Dh::get_2048_256().unwrap().generate_key().unwrap();
+    assert_eq!(
+        alice.compute_key(bob.public_key()).unwrap(),
+        bob.compute_key(alice.public_key()).unwrap()
+    );
+
+    let mut group = c.benchmark_group("kx-keygen");
+    group.bench_function(BenchmarkId::new("openssl", "modp2048-256"), |b| {
+        b.iter(|| Dh::get_2048_256().unwrap().generate_key().unwrap())
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("kx-derive");
+    group.bench_function(BenchmarkId::new("openssl", "modp2048-256"), |b| {
+        b.iter(|| alice.compute_key(black_box(bob.public_key())).unwrap())
+    });
+    group.finish();
+}
+
+fn x25519_derive(
+    private_key: &openssl::pkey::PKeyRef<openssl::pkey::Private>,
+    peer_key: &openssl::pkey::PKeyRef<openssl::pkey::Private>,
+) -> Vec<u8> {
+    let mut deriver = Deriver::new(private_key).unwrap();
+    deriver.set_peer(peer_key).unwrap();
+    deriver.derive_to_vec().unwrap()
 }
 
 fn keygen_bytes<P>() -> u64
